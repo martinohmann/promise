@@ -5,55 +5,52 @@ import (
 	"sync"
 )
 
-type State int
+type State uint8
 
 const (
 	Pending = iota
 	Fulfilled
 	Rejected
-	Adopt
 )
 
 type Value interface{}
 
 type OnFulfilledFunc func(val Value) Value
-type OnRejectedFunc func(err error) error
+
+type OnRejectedFunc func(err error) Value
 
 type ResolveFunc func(val Value)
-type RejectFunc func(err error)
 
-type ExecutorFunc func(resolve ResolveFunc, reject RejectFunc)
+type RejectFunc func(val error)
+
+type ResolutionFunc func(resolve ResolveFunc, reject RejectFunc)
 
 type Promise struct {
 	sync.Mutex
 
-	execute ExecutorFunc
+	wg *sync.WaitGroup
 
+	state State
 	value Value
 	err   error
 
 	fulfillCallbacks []OnFulfilledFunc
 	rejectCallbacks  []OnRejectedFunc
-
-	state State
-
-	wg *sync.WaitGroup
 }
 
-func New(executor ExecutorFunc) *Promise {
+func New(fn ResolutionFunc) *Promise {
 	p := &Promise{
 		wg:               &sync.WaitGroup{},
-		execute:          executor,
 		fulfillCallbacks: make([]OnFulfilledFunc, 0),
 		rejectCallbacks:  make([]OnRejectedFunc, 0),
 	}
 
-	if executor != nil {
+	if fn != nil {
 		p.wg.Add(1)
 		go func() {
 			defer p.wg.Done()
 			defer handlePanic(p)
-			p.execute(p.resolve, p.reject)
+			fn(p.resolve, p.reject)
 		}()
 	}
 
@@ -62,62 +59,109 @@ func New(executor ExecutorFunc) *Promise {
 
 func (p *Promise) resolve(val Value) {
 	p.Lock()
+	defer p.Unlock()
 
+	p.resolveLocked(val)
+}
+
+// resolveLocked resolves the promise. The lock must be held when calling this
+// method. This is a performance optimization to avoid releasing the lock when
+// val causes the promise to be rejected, e.g. because it is an err value or a
+// rejected promise itself. This is necessary to be able to reject a promise in
+// a then-callback.
+func (p *Promise) resolveLocked(val Value) {
 	if p.state != Pending {
-		p.Unlock()
 		return
 	}
 
-	p.value = val
+	switch v := val.(type) {
+	case error:
+		p.rejectLocked(v)
+		return
+	case *Promise:
+		val, err := v.Await()
+		if err != nil {
+			p.rejectLocked(err)
+			return
+		}
+
+		p.value = val
+	default:
+		p.value = v
+	}
+
+	p.err = nil
 
 	for len(p.fulfillCallbacks) > 0 {
 		cb := p.fulfillCallbacks[0]
 		p.fulfillCallbacks = p.fulfillCallbacks[1:]
-		p.Unlock()
+		res := cb(p.value)
 
-		val := cb(p.value)
-		if err, ok := val.(error); ok {
-			p.reject(err)
+		switch v := res.(type) {
+		case error:
+			p.rejectLocked(v)
 			return
-		}
+		case *Promise:
+			val, err := v.Await()
+			if err != nil {
+				p.rejectLocked(err)
+				return
+			}
 
-		p.Lock()
-		p.value = val
+			p.value = val
+		default:
+			p.value = v
+		}
 	}
 
 	p.state = Fulfilled
-
-	p.Unlock()
 }
 
 func (p *Promise) reject(err error) {
 	p.Lock()
+	defer p.Unlock()
 
+	p.rejectLocked(err)
+}
+
+// rejectLocked rejects the promise. The lock must be held when calling this
+// method. This is a performance optimization to avoid releasing the lock when
+// val is a promise that resolves. This is necessary to be able to recover from
+// a rejected promise in a catch-callback.
+func (p *Promise) rejectLocked(err error) {
 	if p.state != Pending {
-		p.Unlock()
 		return
 	}
 
+	p.value = nil
 	p.err = err
 
 	for len(p.rejectCallbacks) > 0 {
 		cb := p.rejectCallbacks[0]
 		p.rejectCallbacks = p.rejectCallbacks[1:]
-		p.Unlock()
+		res := cb(p.err)
 
-		p.err = cb(p.err)
+		switch v := res.(type) {
+		case *Promise:
+			val, err := v.Await()
+			if err == nil {
+				p.resolveLocked(val)
+				return
+			}
 
-		p.Lock()
+			p.err = err
+		case error:
+			p.err = v
+		default:
+			p.err = fmt.Errorf("%v", v)
+		}
 	}
 
 	p.state = Rejected
-
-	p.Unlock()
 }
 
 func handlePanic(promise *Promise) {
-	err := recover()
-	if err != nil {
+	if err := recover(); err != nil {
 		promise.reject(fmt.Errorf("panic while resolving promise: %v", err))
 	}
 }
@@ -147,7 +191,16 @@ func (p *Promise) Then(onFulfilled OnFulfilledFunc, onRejected ...OnRejectedFunc
 		}
 	case Rejected:
 		if len(onRejected) > 0 && onRejected[0] != nil {
-			return Reject(onRejected[0](p.err))
+			res := onRejected[0](p.err)
+
+			switch v := res.(type) {
+			case *Promise:
+				return v
+			case error:
+				return Reject(v)
+			default:
+				return Reject(fmt.Errorf("%v", v))
+			}
 		}
 	}
 
@@ -163,10 +216,9 @@ func Resolve(val Value) *Promise {
 		return p
 	}
 
-	return &Promise{
-		state: Fulfilled,
-		value: val,
-	}
+	return New(func(resolve ResolveFunc, _ RejectFunc) {
+		resolve(val)
+	})
 }
 
 func Reject(err error) *Promise {

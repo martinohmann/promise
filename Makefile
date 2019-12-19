@@ -8,7 +8,7 @@ help:
 
 .PHONY: test
 test: ## run tests
-	go test -race -tags="$(TAGS)" $$(go list ./... | grep -v /vendor/)
+	go test -tags="$(TAGS)" $(TEST_FLAGS) $$(go list ./... | grep -v /vendor/)
 
 .PHONY: vet
 vet: ## run go vet
