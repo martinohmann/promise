@@ -366,6 +366,26 @@ func TestPromise(t *testing.T) {
 				})
 			},
 		},
+		{
+			name:     "immutability: a promise cannot be resolved twice",
+			expected: "foo",
+			setup: func(t *testing.T) *Promise {
+				return New(func(resolve ResolveFunc, _ RejectFunc) {
+					resolve("foo")
+					resolve("bar")
+				})
+			},
+		},
+		{
+			name:        "immutability: a promise cannot be rejected twice",
+			expectedErr: errors.New("foo"),
+			setup: func(t *testing.T) *Promise {
+				return New(func(_ ResolveFunc, reject RejectFunc) {
+					reject(errors.New("foo"))
+					reject(errors.New("bar"))
+				})
+			},
+		},
 	}
 
 	for _, test := range tests {
