@@ -104,7 +104,7 @@ func TestPromise(t *testing.T) {
 		},
 		{
 			name:        "panics in resolution func are recovered and converted into a rejected promise",
-			expectedErr: errors.New("panic while resolving promise: whoops"),
+			expectedErr: errors.New("panic during promise resolution: whoops"),
 			setup: func(t *testing.T) *Promise {
 				return New(func(_ ResolveFunc, _ RejectFunc) {
 					time.Sleep(10 * time.Millisecond)
@@ -114,7 +114,7 @@ func TestPromise(t *testing.T) {
 		},
 		{
 			name:        "panics in Then callbacks are recovered and converted into a rejected promise",
-			expectedErr: errors.New("panic while resolving promise: oops"),
+			expectedErr: errors.New("panic during promise resolution: oops"),
 			setup: func(t *testing.T) *Promise {
 				return New(func(resolve ResolveFunc, _ RejectFunc) {
 					time.Sleep(10 * time.Millisecond)
@@ -126,7 +126,7 @@ func TestPromise(t *testing.T) {
 		},
 		{
 			name:        "panics in Catch callbacks are recovered and converted into a rejected promise",
-			expectedErr: errors.New("panic while resolving promise: oopsie"),
+			expectedErr: errors.New("panic during promise resolution: oopsie"),
 			setup: func(t *testing.T) *Promise {
 				return New(func(_ ResolveFunc, reject RejectFunc) {
 					time.Sleep(10 * time.Millisecond)
@@ -370,11 +370,6 @@ func TestPromise(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			type result struct {
-				val Value
-				err error
-			}
-
 			p := test.setup(t)
 
 			val, err := awaitWithTimeout(t, p, 2*time.Second)
@@ -386,6 +381,10 @@ func TestPromise(t *testing.T) {
 				if !reflect.DeepEqual(test.expectedErr, err) {
 					t.Fatalf("expected error %#v but got %#v", test.expectedErr, err)
 				}
+
+				if val != nil {
+					t.Fatalf("expected val to be nil but got %#v", val)
+				}
 			case test.expectedErr == nil && err != nil:
 				t.Fatalf("expected no error but got %#v", err)
 			case test.expectedErr == nil && err == nil:
@@ -394,9 +393,9 @@ func TestPromise(t *testing.T) {
 				}
 			}
 
-			var expectedState State = Fulfilled
+			var expectedState state = fulfilled
 			if test.expectedErr != nil {
-				expectedState = Rejected
+				expectedState = rejected
 			}
 
 			if p.state != expectedState {

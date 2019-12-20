@@ -5,12 +5,12 @@ import (
 	"sync"
 )
 
-type State uint8
+type state uint8
 
 const (
-	Pending = iota
-	Fulfilled
-	Rejected
+	pending = iota
+	fulfilled
+	rejected
 )
 
 type Value interface{}
@@ -30,7 +30,7 @@ type Promise struct {
 
 	done chan struct{}
 
-	state State
+	state state
 	value Value
 	err   error
 
@@ -61,6 +61,13 @@ func New(fn ResolutionFunc) *Promise {
 	return p
 }
 
+func (p *Promise) popHandler() *handler {
+	h := p.handlers[0]
+	p.handlers = p.handlers[1:]
+
+	return h
+}
+
 func (p *Promise) resolve(val Value) {
 	p.Lock()
 	defer p.Unlock()
@@ -74,7 +81,7 @@ func (p *Promise) resolve(val Value) {
 // rejected promise itself. This is necessary to be able to reject a promise in
 // a then-callback.
 func (p *Promise) resolveLocked(val Value) {
-	if p.state != Pending {
+	if p.state != pending {
 		return
 	}
 
@@ -97,8 +104,7 @@ func (p *Promise) resolveLocked(val Value) {
 	p.err = nil
 
 	for len(p.handlers) > 0 {
-		h := p.handlers[0]
-		p.handlers = p.handlers[1:]
+		h := p.popHandler()
 		if h.onFulfilled == nil {
 			continue
 		}
@@ -122,7 +128,7 @@ func (p *Promise) resolveLocked(val Value) {
 		}
 	}
 
-	p.state = Fulfilled
+	p.state = fulfilled
 	p.handlers = nil
 }
 
@@ -138,7 +144,7 @@ func (p *Promise) reject(err error) {
 // val is a promise that resolves. This is necessary to be able to recover from
 // a rejected promise in a catch-callback.
 func (p *Promise) rejectLocked(err error) {
-	if p.state != Pending {
+	if p.state != pending {
 		return
 	}
 
@@ -146,8 +152,7 @@ func (p *Promise) rejectLocked(err error) {
 	p.err = err
 
 	for len(p.handlers) > 0 {
-		h := p.handlers[0]
-		p.handlers = p.handlers[1:]
+		h := p.popHandler()
 		if h.onRejected == nil {
 			continue
 		}
@@ -171,13 +176,13 @@ func (p *Promise) rejectLocked(err error) {
 		}
 	}
 
-	p.state = Rejected
+	p.state = rejected
 	p.handlers = nil
 }
 
 func handlePanic(promise *Promise) {
 	if err := recover(); err != nil {
-		promise.reject(fmt.Errorf("panic while resolving promise: %v", err))
+		promise.reject(fmt.Errorf("panic during promise resolution: %v", err))
 	}
 }
 
@@ -192,7 +197,7 @@ func (p *Promise) Then(onFulfilled OnFulfilledFunc, onRejected ...OnRejectedFunc
 	defer p.Unlock()
 
 	switch p.state {
-	case Pending:
+	case pending:
 		if onFulfilled != nil {
 			p.handlers = append(p.handlers, &handler{onFulfilled: onFulfilled})
 		}
@@ -200,26 +205,26 @@ func (p *Promise) Then(onFulfilled OnFulfilledFunc, onRejected ...OnRejectedFunc
 		if len(onRejected) > 0 && onRejected[0] != nil {
 			p.handlers = append(p.handlers, &handler{onRejected: onRejected[0]})
 		}
-	case Fulfilled:
+	case fulfilled:
 		if onFulfilled != nil {
-			return Resolve(onFulfilled(p.value))
+			return promiseValue(onFulfilled(p.value))
 		}
-	case Rejected:
+	case rejected:
 		if len(onRejected) > 0 && onRejected[0] != nil {
-			res := onRejected[0](p.err)
-
-			switch v := res.(type) {
-			case *Promise:
-				return v
-			case error:
-				return Reject(v)
-			default:
-				return Resolve(v)
-			}
+			return promiseValue(onRejected[0](p.err))
 		}
 	}
 
 	return p
+}
+
+func promiseValue(val Value) *Promise {
+	switch v := val.(type) {
+	case error:
+		return Reject(v)
+	default:
+		return Resolve(v)
+	}
 }
 
 func (p *Promise) Catch(onRejected OnRejectedFunc) *Promise {
