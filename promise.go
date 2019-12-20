@@ -8,7 +8,7 @@ import (
 type state uint8
 
 const (
-	pending = iota
+	pending state = iota
 	fulfilled
 	rejected
 )
