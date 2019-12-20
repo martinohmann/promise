@@ -405,18 +405,6 @@ func TestPromise(t *testing.T) {
 	}
 }
 
-func TestFlattenResolve(t *testing.T) {
-	p := Resolve(2)
-	if p == nil {
-		t.Fatalf("did not return promise")
-	}
-
-	q := Resolve(p)
-	if p != q {
-		t.Fatalf("did not flatten resolved promise")
-	}
-}
-
 func TestPromise_FinallyResolve(t *testing.T) {
 	called := 0
 	p := Resolve("foo").Finally(func() {

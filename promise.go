@@ -220,6 +220,8 @@ func (p *Promise) Then(onFulfilled OnFulfilledFunc, onRejected ...OnRejectedFunc
 
 func promiseValue(val Value) *Promise {
 	switch v := val.(type) {
+	case *Promise:
+		return v
 	case error:
 		return Reject(v)
 	default:
@@ -242,10 +244,6 @@ func (p *Promise) Finally(fn func()) *Promise {
 }
 
 func Resolve(val Value) *Promise {
-	if p, ok := val.(*Promise); ok {
-		return p
-	}
-
 	return New(func(resolve ResolveFunc, _ RejectFunc) {
 		resolve(val)
 	})
