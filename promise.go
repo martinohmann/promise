@@ -28,31 +28,35 @@ type ResolutionFunc func(resolve ResolveFunc, reject RejectFunc)
 type Promise struct {
 	sync.Mutex
 
-	wg *sync.WaitGroup
+	done chan struct{}
 
 	state State
 	value Value
 	err   error
 
-	fulfillCallbacks []OnFulfilledFunc
-	rejectCallbacks  []OnRejectedFunc
+	handlers []*handler
+}
+
+type handler struct {
+	onFulfilled OnFulfilledFunc
+	onRejected  OnRejectedFunc
 }
 
 func New(fn ResolutionFunc) *Promise {
-	p := &Promise{
-		wg:               &sync.WaitGroup{},
-		fulfillCallbacks: make([]OnFulfilledFunc, 0),
-		rejectCallbacks:  make([]OnRejectedFunc, 0),
+	if fn == nil {
+		panic("resolution func must be non-nil")
 	}
 
-	if fn != nil {
-		p.wg.Add(1)
-		go func() {
-			defer p.wg.Done()
-			defer handlePanic(p)
-			fn(p.resolve, p.reject)
-		}()
+	p := &Promise{
+		handlers: make([]*handler, 0),
+		done:     make(chan struct{}),
 	}
+
+	go func() {
+		defer close(p.done)
+		defer handlePanic(p)
+		fn(p.resolve, p.reject)
+	}()
 
 	return p
 }
@@ -92,10 +96,14 @@ func (p *Promise) resolveLocked(val Value) {
 
 	p.err = nil
 
-	for len(p.fulfillCallbacks) > 0 {
-		cb := p.fulfillCallbacks[0]
-		p.fulfillCallbacks = p.fulfillCallbacks[1:]
-		res := cb(p.value)
+	for len(p.handlers) > 0 {
+		h := p.handlers[0]
+		p.handlers = p.handlers[1:]
+		if h.onFulfilled == nil {
+			continue
+		}
+
+		res := h.onFulfilled(p.value)
 
 		switch v := res.(type) {
 		case error:
@@ -115,6 +123,7 @@ func (p *Promise) resolveLocked(val Value) {
 	}
 
 	p.state = Fulfilled
+	p.handlers = nil
 }
 
 func (p *Promise) reject(err error) {
@@ -136,10 +145,14 @@ func (p *Promise) rejectLocked(err error) {
 	p.value = nil
 	p.err = err
 
-	for len(p.rejectCallbacks) > 0 {
-		cb := p.rejectCallbacks[0]
-		p.rejectCallbacks = p.rejectCallbacks[1:]
-		res := cb(p.err)
+	for len(p.handlers) > 0 {
+		h := p.handlers[0]
+		p.handlers = p.handlers[1:]
+		if h.onRejected == nil {
+			continue
+		}
+
+		res := h.onRejected(p.err)
 
 		switch v := res.(type) {
 		case *Promise:
@@ -153,11 +166,13 @@ func (p *Promise) rejectLocked(err error) {
 		case error:
 			p.err = v
 		default:
-			p.err = fmt.Errorf("%v", v)
+			p.resolveLocked(v)
+			return
 		}
 	}
 
 	p.state = Rejected
+	p.handlers = nil
 }
 
 func handlePanic(promise *Promise) {
@@ -167,7 +182,7 @@ func handlePanic(promise *Promise) {
 }
 
 func (p *Promise) Await() (Value, error) {
-	p.wg.Wait()
+	<-p.done
 
 	return p.value, p.err
 }
@@ -179,11 +194,11 @@ func (p *Promise) Then(onFulfilled OnFulfilledFunc, onRejected ...OnRejectedFunc
 	switch p.state {
 	case Pending:
 		if onFulfilled != nil {
-			p.fulfillCallbacks = append(p.fulfillCallbacks, onFulfilled)
+			p.handlers = append(p.handlers, &handler{onFulfilled: onFulfilled})
 		}
 
 		if len(onRejected) > 0 && onRejected[0] != nil {
-			p.rejectCallbacks = append(p.rejectCallbacks, onRejected[0])
+			p.handlers = append(p.handlers, &handler{onRejected: onRejected[0]})
 		}
 	case Fulfilled:
 		if onFulfilled != nil {
@@ -199,7 +214,7 @@ func (p *Promise) Then(onFulfilled OnFulfilledFunc, onRejected ...OnRejectedFunc
 			case error:
 				return Reject(v)
 			default:
-				return Reject(fmt.Errorf("%v", v))
+				return Resolve(v)
 			}
 		}
 	}

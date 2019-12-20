@@ -4,18 +4,409 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strconv"
 	"testing"
+	"time"
 )
 
-func TestNew(t *testing.T) {
-	p := New(nil)
+func awaitWithTimeout(t *testing.T, p *Promise, timeout time.Duration) (val Value, err error) {
+	done := make(chan struct{})
 
-	if p == nil {
-		t.Fatalf("did not return promise")
+	go func() {
+		defer close(done)
+		val, err = p.Await()
+	}()
+
+	select {
+	case <-done:
+		return
+	case <-time.After(timeout):
+		t.Fatal("timeout exceeded")
+	}
+
+	return
+}
+
+func TestPromise(t *testing.T) {
+	tests := []struct {
+		setup       func(t *testing.T) *Promise
+		name        string
+		expectedErr error
+		expected    Value
+	}{
+		{
+			name:     "simple Then chain",
+			expected: "3",
+			setup: func(t *testing.T) *Promise {
+				return New(func(resolve ResolveFunc, _ RejectFunc) {
+					time.Sleep(10 * time.Millisecond)
+					resolve(2)
+				}).Then(func(val Value) Value {
+					return val.(int) + 1
+				}).Then(func(val Value) Value {
+					return fmt.Sprintf("%d", val.(int))
+				})
+			},
+		},
+		{
+			name:        "rejected promise does not trigger Then callbacks",
+			expectedErr: errors.New("bar: foo"),
+			setup: func(t *testing.T) *Promise {
+				return New(func(_ ResolveFunc, reject RejectFunc) {
+					time.Sleep(10 * time.Millisecond)
+					reject(errors.New("foo"))
+				}).Then(func(val Value) Value {
+					t.Fatalf("unexpected execution of Then callback with value: %v", val)
+
+					return val
+				}).Catch(func(err error) Value {
+					return fmt.Errorf("bar: %v", err)
+				})
+			},
+		},
+		{
+			name:        "errors in Then callbacks are converted into a rejected promise",
+			expectedErr: errors.New("whoops"),
+			setup: func(t *testing.T) *Promise {
+				return New(func(resolve ResolveFunc, _ RejectFunc) {
+					time.Sleep(10 * time.Millisecond)
+					resolve("foo")
+				}).Then(func(val Value) Value {
+					return errors.New("whoops")
+				})
+			},
+		},
+		{
+			name:     "resolved promises returned by Then callbacks are evaluated",
+			expected: "foobar",
+			setup: func(t *testing.T) *Promise {
+				return New(func(resolve ResolveFunc, _ RejectFunc) {
+					time.Sleep(10 * time.Millisecond)
+					resolve("foo")
+				}).Then(func(val Value) Value {
+					return Resolve("bar").Then(func(val2 Value) Value {
+						return val.(string) + val2.(string)
+					})
+				})
+			},
+		},
+		{
+			name:        "rejected promises returned by Then callbacks are evaluated",
+			expectedErr: errors.New("bar"),
+			setup: func(t *testing.T) *Promise {
+				return New(func(resolve ResolveFunc, _ RejectFunc) {
+					time.Sleep(10 * time.Millisecond)
+					resolve("foo")
+				}).Then(func(val Value) Value {
+					return Reject(errors.New("bar"))
+				})
+			},
+		},
+		{
+			name:        "panics in resolution func are recovered and converted into a rejected promise",
+			expectedErr: errors.New("panic while resolving promise: whoops"),
+			setup: func(t *testing.T) *Promise {
+				return New(func(_ ResolveFunc, _ RejectFunc) {
+					time.Sleep(10 * time.Millisecond)
+					panic("whoops")
+				})
+			},
+		},
+		{
+			name:        "panics in Then callbacks are recovered and converted into a rejected promise",
+			expectedErr: errors.New("panic while resolving promise: oops"),
+			setup: func(t *testing.T) *Promise {
+				return New(func(resolve ResolveFunc, _ RejectFunc) {
+					time.Sleep(10 * time.Millisecond)
+					resolve("myvalue")
+				}).Then(func(val Value) Value {
+					panic("oops")
+				})
+			},
+		},
+		{
+			name:        "panics in Catch callbacks are recovered and converted into a rejected promise",
+			expectedErr: errors.New("panic while resolving promise: oopsie"),
+			setup: func(t *testing.T) *Promise {
+				return New(func(_ ResolveFunc, reject RejectFunc) {
+					time.Sleep(10 * time.Millisecond)
+					reject(errors.New("someerror"))
+				}).Catch(func(err error) Value {
+					panic("oopsie")
+				})
+			},
+		},
+		{
+			name:     "rejected promises can be `recovered` with resolved promises in Catch callbacks",
+			expected: "bar",
+			setup: func(t *testing.T) *Promise {
+				return New(func(_ ResolveFunc, reject RejectFunc) {
+					time.Sleep(10 * time.Millisecond)
+					reject(errors.New("foo"))
+				}).Catch(func(err error) Value {
+					return Resolve("bar")
+				})
+			},
+		},
+		{
+			name:        "rejected promises evaluate to errors in Catch callbacks",
+			expectedErr: errors.New("bar"),
+			setup: func(t *testing.T) *Promise {
+				return New(func(_ ResolveFunc, reject RejectFunc) {
+					time.Sleep(10 * time.Millisecond)
+					reject(errors.New("foo"))
+				}).Catch(func(err error) Value {
+					return Reject(errors.New("bar"))
+				})
+			},
+		},
+		{
+			name:     "non-error types return resolved promise Catch callbacks",
+			expected: "bar",
+			setup: func(t *testing.T) *Promise {
+				return New(func(_ ResolveFunc, reject RejectFunc) {
+					time.Sleep(10 * time.Millisecond)
+					reject(errors.New("foo"))
+				}).Catch(func(err error) Value {
+					return "bar"
+				})
+			},
+		},
+		{
+			name:     "resolved promise is immutable and returns new promise when adding Then callback",
+			expected: int(3),
+			setup: func(t *testing.T) *Promise {
+				p := Resolve(2)
+
+				awaitWithTimeout(t, p, 500*time.Millisecond)
+
+				q := p.Then(func(val Value) Value {
+					return val.(int) + 1
+				})
+				if p == q {
+					t.Fatal("expected promises to be different")
+				}
+
+				return q
+			},
+		},
+		{
+			name:     "rejected promise is immutable and returns new promise when adding Catch callback",
+			expected: int(5),
+			setup: func(t *testing.T) *Promise {
+				p := Reject(errors.New("foo"))
+
+				awaitWithTimeout(t, p, 500*time.Millisecond)
+
+				q := p.Then(func(val Value) Value {
+					t.Fatalf("unexpected execution of Then callback with value: %#v", val)
+					return nil
+				}).Catch(func(err error) Value {
+					return Resolve(5)
+				})
+				if p == q {
+					t.Fatal("expected promises to be different")
+				}
+
+				return q
+			},
+		},
+		{
+			name:     "rejected promise is immutable and returns new promise when adding Catch callback (non-error, non-promise)",
+			expected: struct{ name string }{name: "bar"},
+			setup: func(t *testing.T) *Promise {
+				p := Reject(errors.New("foo"))
+
+				awaitWithTimeout(t, p, 500*time.Millisecond)
+
+				q := p.Then(func(val Value) Value {
+					t.Fatalf("unexpected execution of Then callback with value: %#v", val)
+					return nil
+				}).Catch(func(err error) Value {
+					return struct{ name string }{name: "bar"}
+				})
+				if p == q {
+					t.Fatal("expected promises to be different")
+				}
+
+				return q
+			},
+		},
+		{
+			name:        "rejected promise is immutable and returns new promise when adding Catch callback (error)",
+			expectedErr: errors.New("foo foo"),
+			setup: func(t *testing.T) *Promise {
+				p := Reject(errors.New("foo"))
+
+				awaitWithTimeout(t, p, 500*time.Millisecond)
+
+				q := p.Then(func(val Value) Value {
+					t.Fatalf("unexpected execution of Then callback with value: %#v", val)
+					return nil
+				}).Catch(func(err error) Value {
+					return fmt.Errorf("foo %v", err)
+				})
+				if p == q {
+					t.Fatal("expected promises to be different")
+				}
+
+				return q
+			},
+		},
+		{
+			name:     "resolve promise with another promise",
+			expected: int(4),
+			setup: func(t *testing.T) *Promise {
+				return New(func(resolve ResolveFunc, _ RejectFunc) {
+					time.Sleep(10 * time.Millisecond)
+					resolve(Resolve(3).Then(func(val Value) Value {
+						return val.(int) + 1
+					}))
+				})
+			},
+		},
+		{
+			name:        "resolve promise with another rejected promise",
+			expectedErr: errors.New("foo"),
+			setup: func(t *testing.T) *Promise {
+				return New(func(resolve ResolveFunc, _ RejectFunc) {
+					time.Sleep(10 * time.Millisecond)
+					resolve(Reject(errors.New("foo")).Then(func(val Value) Value {
+						t.Fatalf("unexpected execution of Then callback with value: %#v", val)
+						return nil
+					}))
+				})
+			},
+		},
+		{
+			name:        "resolve promise with error",
+			expectedErr: errors.New("foo"),
+			setup: func(t *testing.T) *Promise {
+				return New(func(resolve ResolveFunc, _ RejectFunc) {
+					time.Sleep(10 * time.Millisecond)
+					resolve(errors.New("foo"))
+				})
+			},
+		},
+		{
+			name:     "typed nil error resolves promise",
+			expected: nil,
+			setup: func(t *testing.T) *Promise {
+				return New(func(_ ResolveFunc, reject RejectFunc) {
+					reject(errors.New("foo"))
+				}).Catch(func(err error) Value {
+					err = nil
+					return err
+				})
+			},
+		},
+		{
+			name:     "deeply nested promise chain",
+			expected: "the answer is: 1024",
+			setup: func(t *testing.T) *Promise {
+				return New(func(resolve ResolveFunc, _ RejectFunc) {
+					time.Sleep(10 * time.Millisecond)
+					resolve(2)
+				}).Then(func(val Value) Value {
+					return val.(int) * 2
+				}).Then(func(val Value) Value {
+					return Resolve(val).Then(func(val Value) Value {
+						return val.(int) * 2
+					}).Catch(func(err error) Value {
+						t.Fatalf("unexpected execution of Catch callback with err: %#v", err)
+						return err
+					}).Then(func(val Value) Value {
+						return Reject(fmt.Errorf("%d", val.(int)))
+					})
+				}).Catch(func(err error) Value {
+					val, err := strconv.Atoi(err.Error())
+					if err != nil {
+						return err
+					}
+
+					return Resolve(val)
+				}).Then(func(val Value) Value {
+					return val.(int) * 2
+				}).Catch(func(err error) Value {
+					t.Fatalf("unexpected execution of Catch callback with err: %#v", err)
+					return err
+				}).Then(func(val Value) Value {
+					return Resolve(val).Then(func(val Value) Value {
+						return val.(int) * 2
+					}).Then(func(val Value) Value {
+						return Resolve(val).Then(func(val Value) Value {
+							return val.(int) * 2
+						}).Then(func(val Value) Value {
+							return Resolve(val).Then(func(val Value) Value {
+								return Resolve(val.(int) * 2).Then(func(val Value) Value {
+									return Reject(fmt.Errorf("%d", val.(int)))
+								})
+							})
+						}).Catch(func(err error) Value {
+							val, err := strconv.Atoi(err.Error())
+							if err != nil {
+								return err
+							}
+
+							return Resolve(val).Then(func(val Value) Value {
+								return val.(int) * 2
+							})
+						}).Catch(func(err error) Value {
+							t.Fatalf("unexpected execution of Catch callback with err: %#v", err)
+							return err
+						}).Then(func(val Value) Value {
+							return Reject(fmt.Errorf("%d", val.(int)*4)).Then(func(val Value) Value {
+								t.Fatalf("unexpected execution of Then callback with value: %#v", val)
+								return val
+							})
+						})
+					})
+				}).Catch(func(err error) Value {
+					return fmt.Sprintf("the answer is: %s", err.Error())
+				})
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			type result struct {
+				val Value
+				err error
+			}
+
+			p := test.setup(t)
+
+			val, err := awaitWithTimeout(t, p, 2*time.Second)
+
+			switch {
+			case test.expectedErr != nil && err == nil:
+				t.Fatal("expected error but got nil")
+			case test.expectedErr != nil && err != nil:
+				if !reflect.DeepEqual(test.expectedErr, err) {
+					t.Fatalf("expected error %#v but got %#v", test.expectedErr, err)
+				}
+			case test.expectedErr == nil && err != nil:
+				t.Fatalf("expected no error but got %#v", err)
+			case test.expectedErr == nil && err == nil:
+				if !reflect.DeepEqual(test.expected, val) {
+					t.Fatalf("expected value %#v but got %#v", test.expected, val)
+				}
+			}
+
+			var expectedState State = Fulfilled
+			if test.expectedErr != nil {
+				expectedState = Rejected
+			}
+
+			if p.state != expectedState {
+				t.Fatalf("expected promise to be in state %d, but got %d", expectedState, p.state)
+			}
+		})
 	}
 }
 
-func TestResolve(t *testing.T) {
+func TestFlattenResolve(t *testing.T) {
 	p := Resolve(2)
 	if p == nil {
 		t.Fatalf("did not return promise")
@@ -24,347 +415,5 @@ func TestResolve(t *testing.T) {
 	q := Resolve(p)
 	if p != q {
 		t.Fatalf("did not flatten resolved promise")
-	}
-}
-
-func TestPromise_ResolvedThen(t *testing.T) {
-	p := Resolve(2)
-
-	p.Await()
-
-	p = p.Then(func(val Value) Value { return val.(int) + 1 })
-
-	val, err := p.Await()
-	if err != nil {
-		t.Fatalf("Await returned unexpected error: %v", err)
-	}
-
-	if val.(int) != 3 {
-		t.Fatalf("expected val of 3, but got %v", val)
-	}
-}
-
-func TestPromise_RejectedThenCatchPromise(t *testing.T) {
-	p := Reject(errors.New("foo"))
-
-	p.Await()
-
-	p = p.
-		Then(func(val Value) Value { t.Fatal("then called although it should not"); return nil }).
-		Catch(func(err error) Value { return Resolve(5) })
-
-	val, err := p.Await()
-	if err != nil {
-		t.Fatalf("Await returned unexpected error: %v", err)
-	}
-
-	if val.(int) != 5 {
-		t.Fatalf("expected val of 5, but got %v", val)
-	}
-}
-
-func TestPromise_RejectedThenCatchStruct(t *testing.T) {
-	p := Reject(errors.New("foo"))
-
-	p.Await()
-
-	p = p.
-		Then(func(val Value) Value { t.Fatal("then called although it should not"); return nil }).
-		Catch(func(err error) Value { return struct{ name string }{name: "bar"} })
-
-	_, err := p.Await()
-	if err == nil {
-		t.Fatal("Await did not return expected error, got nil")
-	}
-
-	expectedErr := "{bar}"
-
-	if err.Error() != expectedErr {
-		t.Fatalf("expected error %q, got %q", expectedErr, err.Error())
-	}
-}
-
-func TestPromise_RejectedThenCatch(t *testing.T) {
-	p := Reject(errors.New("foo"))
-
-	p.Await()
-
-	p = p.
-		Then(func(val Value) Value { t.Fatal("then called although it should not"); return nil }).
-		Catch(func(err error) Value { return fmt.Errorf("foo %v", err) })
-
-	_, err := p.Await()
-	if err == nil {
-		t.Fatal("Await did not return expected error, got nil")
-	}
-
-	expectedErr := "foo foo"
-
-	if err.Error() != expectedErr {
-		t.Fatalf("expected error %q, got %q", expectedErr, err.Error())
-	}
-}
-
-func TestPromise_Then(t *testing.T) {
-	calls := 0
-
-	p := New(func(resolve ResolveFunc, _ RejectFunc) {
-		resolve(2)
-	}).Then(func(val Value) Value {
-		calls++
-		if val.(int) != 2 {
-			t.Fatalf("expected 2, but got %v", val)
-		}
-
-		return val.(int) + 1
-	}).Then(func(val Value) Value {
-		calls++
-		return val
-	})
-
-	val, err := p.Await()
-	if err != nil {
-		t.Fatalf("Await returned unexpected error: %v", err)
-	}
-
-	if val.(int) != 3 {
-		t.Fatalf("expected val of 3, but got %v", val)
-	}
-
-	if calls != 2 {
-		t.Fatalf("expected 2 calls of Then callbacks, but got %d", calls)
-	}
-}
-
-func TestPromise_Catch(t *testing.T) {
-	calls := 0
-
-	p := New(func(_ ResolveFunc, reject RejectFunc) {
-		reject(errors.New("foo"))
-	}).Then(func(val Value) Value {
-		t.Fatalf("unexpected execution of Then callback with value: %v", val)
-
-		return val
-	}).Catch(func(err error) Value {
-		calls++
-		return fmt.Errorf("bar: %v", err)
-	})
-
-	_, err := p.Await()
-	if err == nil {
-		t.Fatal("Await did not return expected error, got nil")
-	}
-
-	expectedErr := "bar: foo"
-
-	if err.Error() != expectedErr {
-		t.Fatalf("expected error %q, got %q", expectedErr, err.Error())
-	}
-
-	if calls != 1 {
-		t.Fatalf("expected 1 call of Catch callbacks, but got %d", calls)
-	}
-}
-
-func TestPromise_Panic(t *testing.T) {
-	calls := 0
-
-	p := New(func(resolve ResolveFunc, _ RejectFunc) {
-		panic("whoops")
-	}).Catch(func(err error) Value {
-		calls++
-		return fmt.Errorf("recovered: %v", err)
-	})
-
-	_, err := p.Await()
-	if err == nil {
-		t.Fatal("Await did not return expected error, got nil")
-	}
-
-	expectedErr := "recovered: panic while resolving promise: whoops"
-
-	if err.Error() != expectedErr {
-		t.Fatalf("expected error %q, got %q", expectedErr, err.Error())
-	}
-
-	if calls != 1 {
-		t.Fatalf("expected 1 call of Catch callbacks, but got %d", calls)
-	}
-}
-
-func TestPromise_ThenPanic(t *testing.T) {
-	p := New(func(resolve ResolveFunc, _ RejectFunc) {
-		resolve("foo")
-	}).Then(func(val Value) Value {
-		panic("whoops")
-	})
-
-	_, err := p.Await()
-	if err == nil {
-		t.Fatal("Await did not return expected error, got nil")
-	}
-
-	expectedErr := "panic while resolving promise: whoops"
-
-	if err.Error() != expectedErr {
-		t.Fatalf("expected error %q, got %q", expectedErr, err.Error())
-	}
-}
-
-func TestPromise_ThenError(t *testing.T) {
-	p := New(func(resolve ResolveFunc, _ RejectFunc) {
-		resolve("foo")
-	}).Then(func(val Value) Value {
-		return errors.New("whoops")
-	}).Catch(func(err error) Value {
-		return fmt.Errorf("bar: %v", err)
-	})
-
-	_, err := p.Await()
-	if err == nil {
-		t.Fatal("Await did not return expected error, got nil")
-	}
-
-	expectedErr := "bar: whoops"
-
-	if err.Error() != expectedErr {
-		t.Fatalf("expected error %q, got %q", expectedErr, err.Error())
-	}
-}
-
-func TestPromise_ThenPromise(t *testing.T) {
-	p := New(func(resolve ResolveFunc, _ RejectFunc) {
-		resolve("foo")
-	}).Then(func(val Value) Value {
-		return Resolve("bar").Then(func(val2 Value) Value {
-			return val.(string) + val2.(string)
-		})
-	})
-
-	val, err := p.Await()
-	if err != nil {
-		t.Fatalf("Await returned unexpected error: %#v", err)
-	}
-
-	expected := "foobar"
-
-	if !reflect.DeepEqual(val, expected) {
-		t.Fatalf("expected %q, but got %#v", expected, val)
-	}
-}
-
-func TestPromise_ThenPromiseReject(t *testing.T) {
-	p := New(func(resolve ResolveFunc, _ RejectFunc) {
-		resolve("foo")
-	}).Then(func(val Value) Value {
-		return Reject(errors.New("bar"))
-	})
-
-	_, err := p.Await()
-	if err == nil {
-		t.Fatal("Await did not return expected error, got nil")
-	}
-
-	expectedErr := "bar"
-
-	if err.Error() != expectedErr {
-		t.Fatalf("expected error %q, got %q", expectedErr, err.Error())
-	}
-}
-
-func TestPromise_CatchPanic(t *testing.T) {
-	p := New(func(_ ResolveFunc, reject RejectFunc) {
-		reject(errors.New("foo"))
-	}).Catch(func(err error) Value {
-		panic("whoops")
-	}).Catch(func(err error) Value {
-		return fmt.Errorf("recovered: %v", err)
-	})
-
-	_, err := p.Await()
-	if err == nil {
-		t.Fatal("Await did not return expected error, got nil")
-	}
-
-	expectedErr := "recovered: panic while resolving promise: whoops"
-
-	if err.Error() != expectedErr {
-		t.Fatalf("expected error %q, got %q", expectedErr, err.Error())
-	}
-}
-
-func TestPromise_CatchString(t *testing.T) {
-	p := New(func(_ ResolveFunc, reject RejectFunc) {
-		reject(errors.New("foo"))
-	}).Catch(func(err error) Value {
-		return "barbaz"
-	})
-
-	_, err := p.Await()
-	if err == nil {
-		t.Fatal("Await did not return expected error, got nil")
-	}
-
-	expectedErr := "barbaz"
-
-	if err.Error() != expectedErr {
-		t.Fatalf("expected error %q, got %q", expectedErr, err.Error())
-	}
-}
-
-func TestPromise_CatchStruct(t *testing.T) {
-	p := New(func(_ ResolveFunc, reject RejectFunc) {
-		reject(errors.New("foo"))
-	}).Catch(func(err error) Value {
-		return struct{ one, two string }{one: "bar", two: "baz"}
-	})
-
-	_, err := p.Await()
-	if err == nil {
-		t.Fatal("Await did not return expected error, got nil")
-	}
-
-	expectedErr := "{bar baz}"
-
-	if err.Error() != expectedErr {
-		t.Fatalf("expected error %q, got %q", expectedErr, err.Error())
-	}
-}
-
-func TestPromise_CatchPromise(t *testing.T) {
-	p := New(func(_ ResolveFunc, reject RejectFunc) {
-		reject(errors.New("foo"))
-	}).Catch(func(err error) Value {
-		return Resolve("bar")
-	})
-
-	val, err := p.Await()
-	if err != nil {
-		t.Fatalf("Await returned unexpected error: %#v", err)
-	}
-
-	expected := "bar"
-
-	if !reflect.DeepEqual(val, expected) {
-		t.Fatalf("expected %q, but got %#v", expected, val)
-	}
-}
-
-func TestPromise_CatchPromiseReject(t *testing.T) {
-	p := New(func(_ ResolveFunc, reject RejectFunc) {
-		reject(errors.New("foo"))
-	}).Catch(func(err error) Value {
-		return Reject(errors.New("bar"))
-	})
-
-	_, err := p.Await()
-	if err == nil {
-		t.Fatal("Await did not return expected error, got nil")
-	}
-
-	expectedErr := "bar"
-
-	if err.Error() != expectedErr {
-		t.Fatalf("expected error %q, got %q", expectedErr, err.Error())
 	}
 }
