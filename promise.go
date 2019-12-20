@@ -231,6 +231,16 @@ func (p *Promise) Catch(onRejected OnRejectedFunc) *Promise {
 	return p.Then(nil, onRejected)
 }
 
+func (p *Promise) Finally(fn func()) *Promise {
+	return p.Then(func(val Value) Value {
+		defer fn()
+		return val
+	}).Catch(func(err error) Value {
+		defer fn()
+		return err
+	})
+}
+
 func Resolve(val Value) *Promise {
 	if p, ok := val.(*Promise); ok {
 		return p

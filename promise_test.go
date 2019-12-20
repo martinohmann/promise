@@ -416,3 +416,48 @@ func TestFlattenResolve(t *testing.T) {
 		t.Fatalf("did not flatten resolved promise")
 	}
 }
+
+func TestPromise_FinallyResolve(t *testing.T) {
+	called := 0
+	p := Resolve("foo").Finally(func() {
+		called++
+	})
+
+	val, err := awaitWithTimeout(t, p, 500*time.Millisecond)
+
+	if called != 1 {
+		t.Fatalf("expected Finally callback to be invoked once, but got %d", called)
+	}
+
+	if err != nil {
+		t.Fatalf("expected nil error, got: %#v", err)
+	}
+
+	expected := "foo"
+
+	if val != expected {
+		t.Fatalf("expected value %#v, got %#v", expected, val)
+	}
+}
+
+func TestPromise_FinallyReject(t *testing.T) {
+	called := 0
+	p := Reject(errors.New("foo")).Finally(func() {
+		called++
+	})
+
+	val, err := awaitWithTimeout(t, p, 500*time.Millisecond)
+
+	if called != 1 {
+		t.Fatalf("expected Finally callback to be invoked once, but got %d", called)
+	}
+
+	expectedErr := errors.New("foo")
+	if !reflect.DeepEqual(expectedErr, err) {
+		t.Fatalf("expected error %#v, got: %#v", expectedErr, err)
+	}
+
+	if val != nil {
+		t.Fatalf("expected nil value, got %#v", val)
+	}
+}
