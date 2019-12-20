@@ -295,8 +295,8 @@ func TestPromise(t *testing.T) {
 				return New(func(_ ResolveFunc, reject RejectFunc) {
 					reject(errors.New("foo"))
 				}).Catch(func(err error) Value {
-					err = nil
-					return err
+					var err2 error
+					return err2
 				})
 			},
 		},
