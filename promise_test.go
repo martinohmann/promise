@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func awaitWithTimeout(t *testing.T, p *Promise, timeout time.Duration) (val Value, err error) {
+func awaitWithTimeout(t *testing.T, p Promise, timeout time.Duration) (val Value, err error) {
 	done := make(chan struct{})
 
 	go func() {
@@ -39,7 +39,7 @@ func TestNew(t *testing.T) {
 
 func TestPromise(t *testing.T) {
 	tests := []struct {
-		setup       func(t *testing.T) *Promise
+		setup       func(t *testing.T) Promise
 		name        string
 		expectedErr error
 		expected    Value
@@ -47,7 +47,7 @@ func TestPromise(t *testing.T) {
 		{
 			name:     "simple Then chain",
 			expected: "3",
-			setup: func(t *testing.T) *Promise {
+			setup: func(t *testing.T) Promise {
 				return New(func(resolve ResolveFunc, _ RejectFunc) {
 					time.Sleep(10 * time.Millisecond)
 					resolve(2)
@@ -61,7 +61,7 @@ func TestPromise(t *testing.T) {
 		{
 			name:        "rejected promise does not trigger Then callbacks",
 			expectedErr: errors.New("bar: foo"),
-			setup: func(t *testing.T) *Promise {
+			setup: func(t *testing.T) Promise {
 				return New(func(_ ResolveFunc, reject RejectFunc) {
 					time.Sleep(10 * time.Millisecond)
 					reject(errors.New("foo"))
@@ -77,7 +77,7 @@ func TestPromise(t *testing.T) {
 		{
 			name:        "errors in Then callbacks are converted into a rejected promise",
 			expectedErr: errors.New("whoops"),
-			setup: func(t *testing.T) *Promise {
+			setup: func(t *testing.T) Promise {
 				return New(func(resolve ResolveFunc, _ RejectFunc) {
 					time.Sleep(10 * time.Millisecond)
 					resolve("foo")
@@ -89,7 +89,7 @@ func TestPromise(t *testing.T) {
 		{
 			name:     "resolved promises returned by Then callbacks are evaluated",
 			expected: "foobar",
-			setup: func(t *testing.T) *Promise {
+			setup: func(t *testing.T) Promise {
 				return New(func(resolve ResolveFunc, _ RejectFunc) {
 					time.Sleep(10 * time.Millisecond)
 					resolve("foo")
@@ -103,7 +103,7 @@ func TestPromise(t *testing.T) {
 		{
 			name:        "rejected promises returned by Then callbacks are evaluated",
 			expectedErr: errors.New("bar"),
-			setup: func(t *testing.T) *Promise {
+			setup: func(t *testing.T) Promise {
 				return New(func(resolve ResolveFunc, _ RejectFunc) {
 					time.Sleep(10 * time.Millisecond)
 					resolve("foo")
@@ -115,7 +115,7 @@ func TestPromise(t *testing.T) {
 		{
 			name:        "panics in resolution func are recovered and converted into a rejected promise",
 			expectedErr: errors.New("panic during promise resolution: whoops"),
-			setup: func(t *testing.T) *Promise {
+			setup: func(t *testing.T) Promise {
 				return New(func(_ ResolveFunc, _ RejectFunc) {
 					time.Sleep(10 * time.Millisecond)
 					panic("whoops")
@@ -125,7 +125,7 @@ func TestPromise(t *testing.T) {
 		{
 			name:        "panics in Then callbacks are recovered and converted into a rejected promise",
 			expectedErr: errors.New("panic during promise resolution: oops"),
-			setup: func(t *testing.T) *Promise {
+			setup: func(t *testing.T) Promise {
 				return New(func(resolve ResolveFunc, _ RejectFunc) {
 					time.Sleep(10 * time.Millisecond)
 					resolve("myvalue")
@@ -137,7 +137,7 @@ func TestPromise(t *testing.T) {
 		{
 			name:        "panics in Then callbacks of a resolved promise are recovered and converted into a rejected promise",
 			expectedErr: errors.New("panic during promise resolution: oops"),
-			setup: func(t *testing.T) *Promise {
+			setup: func(t *testing.T) Promise {
 				p := Resolve("myvalue")
 
 				awaitWithTimeout(t, p, 100*time.Millisecond)
@@ -150,7 +150,7 @@ func TestPromise(t *testing.T) {
 		{
 			name:        "panics in Catch callbacks are recovered and converted into a rejected promise",
 			expectedErr: errors.New("panic during promise resolution: oopsie"),
-			setup: func(t *testing.T) *Promise {
+			setup: func(t *testing.T) Promise {
 				return New(func(_ ResolveFunc, reject RejectFunc) {
 					time.Sleep(10 * time.Millisecond)
 					reject(errors.New("someerror"))
@@ -162,7 +162,7 @@ func TestPromise(t *testing.T) {
 		{
 			name:        "panics in Catch callbacks of a rejected promise are recovered and converted into a rejected promise",
 			expectedErr: errors.New("panic during promise resolution: oopsie"),
-			setup: func(t *testing.T) *Promise {
+			setup: func(t *testing.T) Promise {
 				p := Reject(errors.New("someerror"))
 
 				awaitWithTimeout(t, p, 100*time.Millisecond)
@@ -175,7 +175,7 @@ func TestPromise(t *testing.T) {
 		{
 			name:     "rejected promises can be `recovered` with resolved promises in Catch callbacks",
 			expected: "bar",
-			setup: func(t *testing.T) *Promise {
+			setup: func(t *testing.T) Promise {
 				return New(func(_ ResolveFunc, reject RejectFunc) {
 					time.Sleep(10 * time.Millisecond)
 					reject(errors.New("foo"))
@@ -187,7 +187,7 @@ func TestPromise(t *testing.T) {
 		{
 			name:        "rejected promises evaluate to errors in Catch callbacks",
 			expectedErr: errors.New("bar"),
-			setup: func(t *testing.T) *Promise {
+			setup: func(t *testing.T) Promise {
 				return New(func(_ ResolveFunc, reject RejectFunc) {
 					time.Sleep(10 * time.Millisecond)
 					reject(errors.New("foo"))
@@ -199,7 +199,7 @@ func TestPromise(t *testing.T) {
 		{
 			name:     "non-error types return resolved promise Catch callbacks",
 			expected: "bar",
-			setup: func(t *testing.T) *Promise {
+			setup: func(t *testing.T) Promise {
 				return New(func(_ ResolveFunc, reject RejectFunc) {
 					time.Sleep(10 * time.Millisecond)
 					reject(errors.New("foo"))
@@ -211,7 +211,7 @@ func TestPromise(t *testing.T) {
 		{
 			name:     "resolved promise is immutable and returns new promise when adding Then callback",
 			expected: int(3),
-			setup: func(t *testing.T) *Promise {
+			setup: func(t *testing.T) Promise {
 				p := Resolve(2)
 
 				awaitWithTimeout(t, p, 500*time.Millisecond)
@@ -229,7 +229,7 @@ func TestPromise(t *testing.T) {
 		{
 			name:     "rejected promise is immutable and returns new promise when adding Catch callback",
 			expected: int(5),
-			setup: func(t *testing.T) *Promise {
+			setup: func(t *testing.T) Promise {
 				p := Reject(errors.New("foo"))
 
 				awaitWithTimeout(t, p, 500*time.Millisecond)
@@ -250,7 +250,7 @@ func TestPromise(t *testing.T) {
 		{
 			name:     "rejected promise is immutable and returns new promise when adding Catch callback (non-error, non-promise)",
 			expected: struct{ name string }{name: "bar"},
-			setup: func(t *testing.T) *Promise {
+			setup: func(t *testing.T) Promise {
 				p := Reject(errors.New("foo"))
 
 				awaitWithTimeout(t, p, 500*time.Millisecond)
@@ -271,7 +271,7 @@ func TestPromise(t *testing.T) {
 		{
 			name:        "rejected promise is immutable and returns new promise when adding Catch callback (error)",
 			expectedErr: errors.New("foo foo"),
-			setup: func(t *testing.T) *Promise {
+			setup: func(t *testing.T) Promise {
 				p := Reject(errors.New("foo"))
 
 				awaitWithTimeout(t, p, 500*time.Millisecond)
@@ -292,7 +292,7 @@ func TestPromise(t *testing.T) {
 		{
 			name:     "resolve promise with another promise",
 			expected: int(4),
-			setup: func(t *testing.T) *Promise {
+			setup: func(t *testing.T) Promise {
 				return New(func(resolve ResolveFunc, _ RejectFunc) {
 					time.Sleep(10 * time.Millisecond)
 					resolve(Resolve(3).Then(func(val Value) Value {
@@ -304,7 +304,7 @@ func TestPromise(t *testing.T) {
 		{
 			name:        "resolve promise with another rejected promise",
 			expectedErr: errors.New("foo"),
-			setup: func(t *testing.T) *Promise {
+			setup: func(t *testing.T) Promise {
 				return New(func(resolve ResolveFunc, _ RejectFunc) {
 					time.Sleep(10 * time.Millisecond)
 					resolve(Reject(errors.New("foo")).Then(func(val Value) Value {
@@ -317,7 +317,7 @@ func TestPromise(t *testing.T) {
 		{
 			name:        "resolve promise with error",
 			expectedErr: errors.New("foo"),
-			setup: func(t *testing.T) *Promise {
+			setup: func(t *testing.T) Promise {
 				return New(func(resolve ResolveFunc, _ RejectFunc) {
 					time.Sleep(10 * time.Millisecond)
 					resolve(errors.New("foo"))
@@ -327,7 +327,7 @@ func TestPromise(t *testing.T) {
 		{
 			name:     "typed nil error resolves promise",
 			expected: nil,
-			setup: func(t *testing.T) *Promise {
+			setup: func(t *testing.T) Promise {
 				return New(func(_ ResolveFunc, reject RejectFunc) {
 					reject(errors.New("foo"))
 				}).Catch(func(err error) Value {
@@ -339,7 +339,7 @@ func TestPromise(t *testing.T) {
 		{
 			name:     "deeply nested promise chain",
 			expected: "the answer is: 1024",
-			setup: func(t *testing.T) *Promise {
+			setup: func(t *testing.T) Promise {
 				return New(func(resolve ResolveFunc, _ RejectFunc) {
 					time.Sleep(10 * time.Millisecond)
 					resolve(2)
@@ -405,7 +405,7 @@ func TestPromise(t *testing.T) {
 		{
 			name:     "immutability: a promise cannot be resolved twice",
 			expected: "foo",
-			setup: func(t *testing.T) *Promise {
+			setup: func(t *testing.T) Promise {
 				return New(func(resolve ResolveFunc, _ RejectFunc) {
 					resolve("foo")
 					resolve("bar")
@@ -415,7 +415,7 @@ func TestPromise(t *testing.T) {
 		{
 			name:        "immutability: a promise cannot be rejected twice",
 			expectedErr: errors.New("foo"),
-			setup: func(t *testing.T) *Promise {
+			setup: func(t *testing.T) Promise {
 				return New(func(_ ResolveFunc, reject RejectFunc) {
 					reject(errors.New("foo"))
 					reject(errors.New("bar"))
@@ -425,7 +425,7 @@ func TestPromise(t *testing.T) {
 		{
 			name:     "resolve promise with a thenable",
 			expected: "foo",
-			setup: func(t *testing.T) *Promise {
+			setup: func(t *testing.T) Promise {
 				thenable := ResolutionFunc(func(resolve ResolveFunc, reject RejectFunc) {
 					resolve("foo")
 				})
@@ -438,7 +438,7 @@ func TestPromise(t *testing.T) {
 		{
 			name:     "resolve promise with a thenable #2",
 			expected: "foo",
-			setup: func(t *testing.T) *Promise {
+			setup: func(t *testing.T) Promise {
 				thenable := ResolutionFunc(func(resolve ResolveFunc, reject RejectFunc) {
 					resolve("foo")
 				})
@@ -451,7 +451,7 @@ func TestPromise(t *testing.T) {
 		{
 			name:        "reject promise with a thenable",
 			expectedErr: errors.New("foo"),
-			setup: func(t *testing.T) *Promise {
+			setup: func(t *testing.T) Promise {
 				thenable := ResolutionFunc(func(resolve ResolveFunc, reject RejectFunc) {
 					reject(errors.New("foo"))
 				})
@@ -464,7 +464,7 @@ func TestPromise(t *testing.T) {
 		{
 			name:     "recover rejected promise with a thenable",
 			expected: "foo",
-			setup: func(t *testing.T) *Promise {
+			setup: func(t *testing.T) Promise {
 				thenable := ResolutionFunc(func(resolve ResolveFunc, reject RejectFunc) {
 					resolve("foo")
 				})
@@ -477,7 +477,7 @@ func TestPromise(t *testing.T) {
 		{
 			name:        "resolve promise with a thenable which rejects",
 			expectedErr: errors.New("foo"),
-			setup: func(t *testing.T) *Promise {
+			setup: func(t *testing.T) Promise {
 				thenable := ResolutionFunc(func(resolve ResolveFunc, reject RejectFunc) {
 					reject(errors.New("foo"))
 				})
@@ -490,7 +490,7 @@ func TestPromise(t *testing.T) {
 		{
 			name:        "resolve promise with a thenable which rejects #2",
 			expectedErr: errors.New("foo"),
-			setup: func(t *testing.T) *Promise {
+			setup: func(t *testing.T) Promise {
 				thenable := ResolutionFunc(func(resolve ResolveFunc, reject RejectFunc) {
 					reject(errors.New("foo"))
 				})
@@ -503,7 +503,7 @@ func TestPromise(t *testing.T) {
 		{
 			name:        "a promise cannot be resolved with itself",
 			expectedErr: ErrCircularResolutionChain,
-			setup: func(t *testing.T) *Promise {
+			setup: func(t *testing.T) Promise {
 				p := New(func(resolve ResolveFunc, _ RejectFunc) {
 					time.Sleep(100 * time.Millisecond)
 					resolve("foo")
@@ -517,7 +517,7 @@ func TestPromise(t *testing.T) {
 		{
 			name:        "a promise cannot be resolved with itself #2",
 			expectedErr: ErrCircularResolutionChain,
-			setup: func(t *testing.T) *Promise {
+			setup: func(t *testing.T) Promise {
 				p := New(func(resolve ResolveFunc, reject RejectFunc) {
 					time.Sleep(100 * time.Millisecond)
 					reject(errors.New("foo"))
@@ -560,8 +560,10 @@ func TestPromise(t *testing.T) {
 				expectedState = rejected
 			}
 
-			if p.state != expectedState {
-				t.Fatalf("expected promise to be in state %d, but got %d", expectedState, p.state)
+			state := p.(*promise).state
+
+			if state != expectedState {
+				t.Fatalf("expected promise to be in state %d, but got %d", expectedState, state)
 			}
 		})
 	}

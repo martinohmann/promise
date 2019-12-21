@@ -18,23 +18,23 @@ const (
 
 // Value describes the value of a fulfilled promise. This is an interface type
 // to allow arbitrary types.
-type Value interface{}
+type Value = interface{}
 
 // OnFulfilledFunc is used in promise fulfillment handlers.
-type OnFulfilledFunc func(val Value) Value
+type OnFulfilledFunc = func(val Value) Value
 
 // OnRejectedFunc is used in promise rejection handlers.
-type OnRejectedFunc func(err error) Value
+type OnRejectedFunc = func(err error) Value
 
 // ResolveFunc is passed as the first argument to a ResolutionFunc and may be
 // called by the user to trigger the promise fulfillment handler chain with the
 // provided value.
-type ResolveFunc func(val Value)
+type ResolveFunc = func(val Value)
 
 // RejectFunc is passed as the second argument to a ResolutionFunc and may be
 // called by the user to trigger the promise rejection handler chain with the
 // provided error value.
-type RejectFunc func(val error)
+type RejectFunc = func(val error)
 
 // ResolutionFunc is passed to a promise in order to expose ResolveFunc and
 // RejectFunc to the application logic that decides about fulfillment or
@@ -51,15 +51,48 @@ func (f ResolutionFunc) Then(resolve ResolveFunc, reject RejectFunc) {
 	f(resolve, reject)
 }
 
+// A Promise represents the eventual completion (or failure) of an asynchronous
+// operation, and its resulting value.
+type Promise interface {
+	// Then adds a handler to handle promise fulfillment (onFulfilled). Optionally
+	// it also accepts a second handler func to handle promise rejection cases
+	// (onRejected). Passing a nil func for either of the two results in no
+	// handlers to be created for these cases. Returning non-nil errors, rejected
+	// promises or panics in the onFulfilled handler will reject the promise. Any
+	// other value will be passed to the next onFulfilled handler in the chain,
+	// eventually resolving the promise if there are no more handlers left.
+	// Similarly, non-nil errors and rejected promises returned by or panics during
+	// the execution of the onRejected handler will result in the promise to be
+	// rejected, whereas any value different from these will recover from the
+	// rejection and trigger the next onFulfilled handler. Returns a promise.
+	Then(onFulfilled OnFulfilledFunc, onRejected ...OnRejectedFunc) Promise
+
+	// Catch adds a handler to handle promise rejections. It behaves the same as
+	// calling Promise.Then(nil, onRejected) instead. A passed nil func will be
+	// ignored and does not cause any errors. See the documentation of Then for
+	// details on how return values of the onRejected handler affect the promise
+	// resolution. Returns a promise.
+	Catch(onRejected OnRejectedFunc) Promise
+
+	// Finally executes fn when the promise is settled, i.e. either fulfilled or
+	// rejected. This provides a way to run code regardless of the outcome of the
+	// promise resolution process. Returns a promise.
+	Finally(fn func()) Promise
+
+	// Await blocks until the promise is settled, i.e. either fulfilled or
+	// rejected. It returns the promise value and an error. In the case of a
+	// rejected promise, the error will be non-nil and contains the rejection
+	// reason. The returned value contains the result of a fulfulled promise.
+	Await() (Value, error)
+}
+
 // A Thenable is a special kind of handler that can be returned during promise
 // resolution/rejection.
 type Thenable interface {
 	Then(resolve ResolveFunc, reject RejectFunc)
 }
 
-// A Promise represents the eventual completion (or failure) of an asynchronous
-// operation, and its resulting value.
-type Promise struct {
+type promise struct {
 	sync.Mutex
 
 	done chan struct{}
@@ -82,13 +115,13 @@ type handler struct {
 // New creates a new promise with the resolution func fn. Within fn either the
 // passed `resolve` or `reject` func must be called exactly once with a value
 // or error to fulfill or reject the promise. Neither calling `resolve` nor
-// `reject` will cause the promise to be in a pending state.
-func New(fn ResolutionFunc) *Promise {
+// `reject` will cause the promise to stay in a pending state.
+func New(fn ResolutionFunc) Promise {
 	if fn == nil {
 		panic("resolution func must be non-nil")
 	}
 
-	p := &Promise{
+	p := &promise{
 		handlers: make([]*handler, 0),
 		done:     make(chan struct{}),
 	}
@@ -104,7 +137,7 @@ func New(fn ResolutionFunc) *Promise {
 
 // popHandler removes the next handler from the handler chain and returns it.
 // Will panic if called when the handlers slice is empty.
-func (p *Promise) popHandler() *handler {
+func (p *promise) popHandler() *handler {
 	h := p.handlers[0]
 	p.handlers = p.handlers[1:]
 
@@ -113,7 +146,7 @@ func (p *Promise) popHandler() *handler {
 
 // resolve attempts to fulfill p with val. This internally calls resolveLocked
 // after acquiring the lock.
-func (p *Promise) resolve(val Value) {
+func (p *promise) resolve(val Value) {
 	p.Lock()
 	defer p.Unlock()
 
@@ -130,7 +163,7 @@ var ErrCircularResolutionChain = errors.New("circular resolution chain: a promis
 // val causes the promise to be rejected, e.g. because it is an err value or a
 // rejected promise itself. This is necessary to be able to reject a promise in
 // a then-handler.
-func (p *Promise) resolveLocked(val Value) {
+func (p *promise) resolveLocked(val Value) {
 	if p.state != pending {
 		return
 	}
@@ -174,7 +207,7 @@ func (p *Promise) resolveLocked(val Value) {
 // cases applies: a promise or thenable in the chain rejected, the value was a
 // non-nil error, or a circular dependency in the resolution chain was
 // detected.
-func (p *Promise) resolveValue(val Value) (Value, error) {
+func (p *promise) resolveValue(val Value) (Value, error) {
 	switch v := val.(type) {
 	case error:
 		return nil, v
@@ -185,7 +218,7 @@ func (p *Promise) resolveValue(val Value) (Value, error) {
 		}
 
 		return val, nil
-	case *Promise:
+	case Promise:
 		if v == p {
 			return nil, ErrCircularResolutionChain
 		}
@@ -203,7 +236,7 @@ func (p *Promise) resolveValue(val Value) (Value, error) {
 
 // reject attempts to reject p with err. This internally calls rejectLocked
 // after acquiring the lock.
-func (p *Promise) reject(err error) {
+func (p *promise) reject(err error) {
 	p.Lock()
 	defer p.Unlock()
 
@@ -214,7 +247,7 @@ func (p *Promise) reject(err error) {
 // method. This is a performance optimization to avoid releasing the lock when
 // val is a promise that resolves. This is necessary to be able to recover from
 // a rejected promise in a catch-handler.
-func (p *Promise) rejectLocked(err error) {
+func (p *promise) rejectLocked(err error) {
 	if p.state != pending {
 		return
 	}
@@ -242,7 +275,7 @@ func (p *Promise) rejectLocked(err error) {
 			}
 
 			p.err = err
-		case *Promise:
+		case Promise:
 			if v == p {
 				p.rejectLocked(ErrCircularResolutionChain)
 				return
@@ -270,34 +303,21 @@ func (p *Promise) rejectLocked(err error) {
 // handlePanic handles a panic by rejecting the promise with the panic reason.
 // Must be called as a deferred function at the beginning of the code section
 // that may panic.
-func handlePanic(promise *Promise) {
+func handlePanic(promise *promise) {
 	if err := recover(); err != nil {
 		promise.reject(fmt.Errorf("panic during promise resolution: %v", err))
 	}
 }
 
-// Await blocks until the promise is settled, i.e. either fulfilled or
-// rejected. It returns the promise value and an error. In the case of a
-// rejected promise, the error will be non-nil and contains the rejection
-// reason. The returned value contains the result of a fulfulled promise.
-func (p *Promise) Await() (Value, error) {
+// Await implements the Await method of the Promise interface.
+func (p *promise) Await() (Value, error) {
 	<-p.done
 
 	return p.value, p.err
 }
 
-// Then adds a handler to handle promise fulfillment (onFulfilled). Optionally
-// it also accepts a second handler func to handle promise rejection cases
-// (onRejected). Passing a nil func for either of the two results in no
-// handlers to be created for these cases. Returning non-nil errors, rejected
-// promises or panics in the onFulfilled handler will reject the promise. Any
-// other value will be passed to the next onFulfilled handler in the chain,
-// eventually resolving the promise if there are no more handlers left.
-// Similarly, non-nil errors and rejected promises returned by or panics during
-// the execution of the onRejected handler will result in the promise to be
-// rejected, whereas any value different from these will recover from the
-// rejection and trigger the next onFulfilled handler. Returns a promise.
-func (p *Promise) Then(onFulfilled OnFulfilledFunc, onRejected ...OnRejectedFunc) *Promise {
+// Then implements the Then method of the Promise interface.
+func (p *promise) Then(onFulfilled OnFulfilledFunc, onRejected ...OnRejectedFunc) Promise {
 	p.Lock()
 	defer p.Unlock()
 
@@ -323,19 +343,13 @@ func (p *Promise) Then(onFulfilled OnFulfilledFunc, onRejected ...OnRejectedFunc
 	return p
 }
 
-// Catch adds a handler to handle promise rejections. It behaves the same as
-// calling Promise.Then(nil, onRejected) instead. A passed nil func will be
-// ignored and does not cause any errors. See the documentation of Then for
-// details on how return values of the onRejected handler affect the promise
-// resolution. Returns a promise.
-func (p *Promise) Catch(onRejected OnRejectedFunc) *Promise {
+// Catch implements the Catch method of the Promise interface.
+func (p *promise) Catch(onRejected OnRejectedFunc) Promise {
 	return p.Then(nil, onRejected)
 }
 
-// Finally executes fn when the promise is settled, i.e. either fulfilled or
-// rejected. This provides a way to run code regardless of the outcome of the
-// promise resolution process. Returns a promise.
-func (p *Promise) Finally(fn func()) *Promise {
+// Finally implements the Finally method of the Promise interface.
+func (p *promise) Finally(fn func()) Promise {
 	return p.Then(func(val Value) Value {
 		defer fn()
 		return val
@@ -348,14 +362,14 @@ func (p *Promise) Finally(fn func()) *Promise {
 // Resolve returns a promise that is resolved with given value. If val is a
 // non-nil error or a rejected promise, the promise will be resolved to a
 // rejected promise instead.
-func Resolve(val Value) *Promise {
+func Resolve(val Value) Promise {
 	return New(func(resolve ResolveFunc, _ RejectFunc) {
 		resolve(val)
 	})
 }
 
 // Reject returns a promise that is rejected with given error reason.
-func Reject(err error) *Promise {
+func Reject(err error) Promise {
 	return New(func(_ ResolveFunc, reject RejectFunc) {
 		reject(err)
 	})
