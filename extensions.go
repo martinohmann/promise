@@ -5,6 +5,9 @@ type indexedValue struct {
 	value interface{}
 }
 
+// Race returns a promise that fulfills or rejects as soon as one of the
+// promises in the passed slice fulfills or rejects, with the value or reason
+// from that promise.
 func Race(promises ...*Promise) *Promise {
 	if len(promises) == 0 {
 		return Resolve(nil)
@@ -33,6 +36,13 @@ func Race(promises ...*Promise) *Promise {
 	})
 }
 
+// All method returns a single promise that fulfills when all of the promises
+// passed as a slice have been fulfilled or when the slice contains no
+// promises. It rejects with the reason of the first promise that rejects.
+//
+// It is typically used after having started multiple asynchronous tasks to run
+// concurrently and having created promises for their results, so that one can
+// wait for all the tasks being finished.
 func All(promises ...*Promise) *Promise {
 	if len(promises) == 0 {
 		return Resolve([]Value{})
@@ -70,11 +80,16 @@ func All(promises ...*Promise) *Promise {
 	})
 }
 
+// Result holds a value in case of a fulfilled promise, or a non-nil error if
+// the promise was rejected.
 type Result struct {
 	Value Value
 	Err   error
 }
 
+// AllSettled returns a promise that resolves after all of the given promises
+// have either resolved or rejected, with a slice of Result values that each
+// describe the outcome of each promise.
 func AllSettled(promises ...*Promise) *Promise {
 	if len(promises) == 0 {
 		return Resolve([]Result{})
