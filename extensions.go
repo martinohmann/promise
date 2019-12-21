@@ -13,7 +13,7 @@ type indexedValue struct {
 // Race returns a promise that fulfills or rejects as soon as one of the
 // promises in the passed slice fulfills or rejects, with the value or reason
 // from that promise.
-func Race(promises ...*Promise) *Promise {
+func Race(promises ...Promise) Promise {
 	if len(promises) == 0 {
 		return Resolve(nil)
 	}
@@ -48,7 +48,7 @@ func Race(promises ...*Promise) *Promise {
 // It is typically used after having started multiple asynchronous tasks to run
 // concurrently and having created promises for their results, so that one can
 // wait for all the tasks being finished.
-func All(promises ...*Promise) *Promise {
+func All(promises ...Promise) Promise {
 	if len(promises) == 0 {
 		return Resolve([]Value{})
 	}
@@ -112,7 +112,7 @@ func (e AggregateError) Error() string {
 // promises are rejected), then the returned promise is rejected with an
 // AggregateError, containing all rejection reasons of individual promises.
 // Essentially, this func does the opposite of All.
-func Any(promises ...*Promise) *Promise {
+func Any(promises ...Promise) Promise {
 	if len(promises) == 0 {
 		return Resolve(nil)
 	}
@@ -159,7 +159,7 @@ type Result struct {
 // AllSettled returns a promise that resolves after all of the given promises
 // have either resolved or rejected, with a slice of Result values that each
 // describe the outcome of each promise.
-func AllSettled(promises ...*Promise) *Promise {
+func AllSettled(promises ...Promise) Promise {
 	if len(promises) == 0 {
 		return Resolve([]Result{})
 	}
