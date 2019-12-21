@@ -6,6 +6,8 @@ import (
 	"sync"
 )
 
+// state is the type of the promise state. Is one of: pending, fulfilled or
+// rejected.
 type state uint8
 
 const (
@@ -69,6 +71,9 @@ type Promise struct {
 	handlers []*handler
 }
 
+// handler is a holder for deferred resolution or rejection handlers. The
+// implementation assumes that only one of onFulfilled and onRejected is a
+// non-nil function, but not both.
 type handler struct {
 	onFulfilled OnFulfilledFunc
 	onRejected  OnRejectedFunc
@@ -97,6 +102,8 @@ func New(fn ResolutionFunc) *Promise {
 	return p
 }
 
+// popHandler removes the next handler from the handler chain and returns it.
+// Will panic if called when the handlers slice is empty.
 func (p *Promise) popHandler() *handler {
 	h := p.handlers[0]
 	p.handlers = p.handlers[1:]
@@ -104,6 +111,8 @@ func (p *Promise) popHandler() *handler {
 	return h
 }
 
+// resolve attempts to fulfill p with val. This internally calls resolveLocked
+// after acquiring the lock.
 func (p *Promise) resolve(val Value) {
 	p.Lock()
 	defer p.Unlock()
@@ -126,79 +135,74 @@ func (p *Promise) resolveLocked(val Value) {
 		return
 	}
 
-	switch v := val.(type) {
-	case error:
-		p.rejectLocked(v)
+	val, err := p.resolveValue(val)
+	if err != nil {
+		p.rejectLocked(err)
 		return
-	case Thenable:
-		val, err := New(v.Then).Await()
-		if err != nil {
-			p.rejectLocked(err)
-			return
-		}
-
-		p.value = val
-	case *Promise:
-		if v == p {
-			p.rejectLocked(ErrCircularResolutionChain)
-			return
-		}
-
-		val, err := v.Await()
-		if err != nil {
-			p.rejectLocked(err)
-			return
-		}
-
-		p.value = val
-	default:
-		p.value = v
 	}
 
+	p.value = val
 	p.err = nil
 
 	for len(p.handlers) > 0 {
 		h := p.popHandler()
 		if h.onFulfilled == nil {
+			// This is an onRejected handler which gets ignored since we are
+			// trying to resolve the promise. We must discard it or we might
+			// get weird behaviour later on.
 			continue
 		}
 
 		res := h.onFulfilled(p.value)
 
-		switch v := res.(type) {
-		case error:
-			p.rejectLocked(v)
+		val, err := p.resolveValue(res)
+		if err != nil {
+			p.rejectLocked(err)
 			return
-		case Thenable:
-			val, err := New(v.Then).Await()
-			if err != nil {
-				p.rejectLocked(err)
-				return
-			}
-
-			p.value = val
-		case *Promise:
-			if v == p {
-				p.rejectLocked(ErrCircularResolutionChain)
-				return
-			}
-
-			val, err := v.Await()
-			if err != nil {
-				p.rejectLocked(err)
-				return
-			}
-
-			p.value = val
-		default:
-			p.value = v
 		}
+
+		p.value = val
 	}
 
 	p.state = fulfilled
 	p.handlers = nil
 }
 
+// resolveValue tries to resolve all nested thenables and promises in val to
+// the final promise value and return that as the first return value. As the
+// second return value a non-nil error is returned if one of the following
+// cases applies: a promise or thenable in the chain rejected, the value was a
+// non-nil error, or a circular dependency in the resolution chain was
+// detected.
+func (p *Promise) resolveValue(val Value) (Value, error) {
+	switch v := val.(type) {
+	case error:
+		return nil, v
+	case Thenable:
+		val, err := New(v.Then).Await()
+		if err != nil {
+			return nil, err
+		}
+
+		return val, nil
+	case *Promise:
+		if v == p {
+			return nil, ErrCircularResolutionChain
+		}
+
+		val, err := v.Await()
+		if err != nil {
+			return nil, err
+		}
+
+		return val, nil
+	default:
+		return v, nil
+	}
+}
+
+// reject attempts to reject p with err. This internally calls rejectLocked
+// after acquiring the lock.
 func (p *Promise) reject(err error) {
 	p.Lock()
 	defer p.Unlock()
@@ -221,6 +225,9 @@ func (p *Promise) rejectLocked(err error) {
 	for len(p.handlers) > 0 {
 		h := p.popHandler()
 		if h.onRejected == nil {
+			// This is an onFulfilled handler which gets ignored since we are
+			// trying to reject the promise. We must discard it or we might get
+			// weird behaviour later on.
 			continue
 		}
 
@@ -260,6 +267,9 @@ func (p *Promise) rejectLocked(err error) {
 	p.handlers = nil
 }
 
+// handlePanic handles a panic by rejecting the promise with the panic reason.
+// Must be called as a deferred function at the beginning of the code section
+// that may panic.
 func handlePanic(promise *Promise) {
 	if err := recover(); err != nil {
 		promise.reject(fmt.Errorf("panic during promise resolution: %v", err))
