@@ -245,26 +245,15 @@ func (p *Promise) Then(onFulfilled OnFulfilledFunc, onRejected ...OnRejectedFunc
 		}
 	case fulfilled:
 		if onFulfilled != nil {
-			return promiseValue(onFulfilled(p.value))
+			return Resolve(p.value).Then(onFulfilled)
 		}
 	case rejected:
 		if len(onRejected) > 0 && onRejected[0] != nil {
-			return promiseValue(onRejected[0](p.err))
+			return Reject(p.err).Then(nil, onRejected[0])
 		}
 	}
 
 	return p
-}
-
-func promiseValue(val Value) *Promise {
-	switch v := val.(type) {
-	case *Promise:
-		return v
-	case error:
-		return Reject(v)
-	default:
-		return Resolve(v)
-	}
 }
 
 // Catch adds a handler to handle promise rejections. It behaves the same as

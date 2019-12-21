@@ -125,6 +125,19 @@ func TestPromise(t *testing.T) {
 			},
 		},
 		{
+			name:        "panics in Then callbacks of a resolved promise are recovered and converted into a rejected promise",
+			expectedErr: errors.New("panic during promise resolution: oops"),
+			setup: func(t *testing.T) *Promise {
+				p := Resolve("myvalue")
+
+				awaitWithTimeout(t, p, 100*time.Millisecond)
+
+				return p.Then(func(val Value) Value {
+					panic("oops")
+				})
+			},
+		},
+		{
 			name:        "panics in Catch callbacks are recovered and converted into a rejected promise",
 			expectedErr: errors.New("panic during promise resolution: oopsie"),
 			setup: func(t *testing.T) *Promise {
@@ -132,6 +145,19 @@ func TestPromise(t *testing.T) {
 					time.Sleep(10 * time.Millisecond)
 					reject(errors.New("someerror"))
 				}).Catch(func(err error) Value {
+					panic("oopsie")
+				})
+			},
+		},
+		{
+			name:        "panics in Catch callbacks of a rejected promise are recovered and converted into a rejected promise",
+			expectedErr: errors.New("panic during promise resolution: oopsie"),
+			setup: func(t *testing.T) *Promise {
+				p := Reject(errors.New("someerror"))
+
+				awaitWithTimeout(t, p, 100*time.Millisecond)
+
+				return p.Catch(func(err error) Value {
 					panic("oopsie")
 				})
 			},
