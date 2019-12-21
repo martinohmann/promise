@@ -13,16 +13,33 @@ const (
 	rejected
 )
 
+// Value describes the value of a fulfilled promise. This is an interface type
+// to allow arbitrary types.
 type Value interface{}
 
+// OnFulfilledFunc is used in promise fulfillment handlers.
 type OnFulfilledFunc func(val Value) Value
 
+// OnRejectedFunc is used in promise rejection handlers.
 type OnRejectedFunc func(err error) Value
 
+// ResolveFunc is passed as the first argument to a ResolutionFunc and may be
+// called by the user to trigger the promise fulfillment handler chain with the
+// provided value.
 type ResolveFunc func(val Value)
 
+// RejectFunc is passed as the second argument to a ResolutionFunc and may be
+// called by the user to trigger the promise rejection handler chain with the
+// provided error value.
 type RejectFunc func(val error)
 
+// ResolutionFunc is passed to a promise in order to expose ResolveFunc and
+// RejectFunc to the application logic that decides about fulfillment or
+// rejection of a promise. At least one of `resolve` or `reject` must be called
+// in order to trigger the resolution of a given promise. Subsequent calls to
+// `resolve` or `reject` are ignored. Not calling any of the two leaves the
+// promise in a pending state. A panic in the ResolutionFunc will be recovered
+// and causes the promise to be reject with the panic message.
 type ResolutionFunc func(resolve ResolveFunc, reject RejectFunc)
 
 // A Promise represents the eventual completion (or failure) of an asynchronous
