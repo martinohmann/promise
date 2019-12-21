@@ -146,6 +146,79 @@ func TestAll_Reject(t *testing.T) {
 	}
 }
 
+func TestAny_Empty(t *testing.T) {
+	val, err := awaitWithTimeout(t, Any(), 500*time.Millisecond)
+	if err != nil {
+		t.Fatalf("expected nil error, got: %#v", err)
+	}
+
+	if val != nil {
+		t.Fatalf("expected nil value, got %#v", val)
+	}
+}
+
+func TestAny_Resolve(t *testing.T) {
+	promiseA := New(func(resolve ResolveFunc, reject RejectFunc) {
+		time.Sleep(50 * time.Millisecond)
+		resolve("foo")
+	})
+
+	promiseB := New(func(resolve ResolveFunc, reject RejectFunc) {
+		time.Sleep(10 * time.Millisecond)
+		resolve("bar")
+	})
+
+	promiseC := New(func(resolve ResolveFunc, reject RejectFunc) {
+		reject(errors.New("baz"))
+	})
+
+	p := Any(promiseC, promiseA, promiseB)
+
+	val, err := awaitWithTimeout(t, p, 2*time.Second)
+	if err != nil {
+		t.Fatalf("expected nil error, got: %#v", err)
+	}
+
+	expected := "bar"
+
+	if !reflect.DeepEqual(expected, val) {
+		t.Fatalf("expected value %#v, got %#v", expected, val)
+	}
+}
+
+func TestAny_Reject(t *testing.T) {
+	promiseA := New(func(resolve ResolveFunc, reject RejectFunc) {
+		time.Sleep(50 * time.Millisecond)
+		reject(errors.New("foo"))
+	})
+
+	promiseB := New(func(resolve ResolveFunc, reject RejectFunc) {
+		time.Sleep(10 * time.Millisecond)
+		reject(errors.New("bar"))
+	})
+
+	promiseC := New(func(resolve ResolveFunc, reject RejectFunc) {
+		reject(errors.New("baz"))
+	})
+
+	p := Any(promiseC, promiseA, promiseB)
+
+	val, err := awaitWithTimeout(t, p, 2*time.Second)
+
+	expectedErr := AggregateError{
+		errors.New("baz"),
+		errors.New("foo"),
+		errors.New("bar"),
+	}
+	if !reflect.DeepEqual(expectedErr, err) {
+		t.Fatalf("expected error %#v, got: %#v", expectedErr, err)
+	}
+
+	if val != nil {
+		t.Fatalf("expected nil value, got %#v", val)
+	}
+}
+
 func TestAllSettled_Empty(t *testing.T) {
 	val, err := awaitWithTimeout(t, AllSettled(), 500*time.Millisecond)
 	if err != nil {
@@ -194,5 +267,24 @@ func TestAllSettled(t *testing.T) {
 
 	if !reflect.DeepEqual(expected, val) {
 		t.Fatalf("expected value %#v, got %#v", expected, val)
+	}
+}
+
+func TestAggregateError(t *testing.T) {
+	one := AggregateError{errors.New("foo")}
+
+	expected := "foo"
+	if one.Error() != expected {
+		t.Fatalf("expected %q, got: %q", expected, one.Error())
+	}
+
+	multi := AggregateError{errors.New("foo"), errors.New("bar"), errors.New("baz")}
+
+	expected = `3 promises rejected due to errors:
+* foo
+* bar
+* baz`
+	if multi.Error() != expected {
+		t.Fatalf("expected %q, got: %q", expected, multi.Error())
 	}
 }

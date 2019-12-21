@@ -1,5 +1,10 @@
 package promise
 
+import (
+	"fmt"
+	"strings"
+)
+
 type indexedValue struct {
 	index int
 	value interface{}
@@ -77,6 +82,70 @@ func All(promises ...*Promise) *Promise {
 		}
 
 		resolve(results)
+	})
+}
+
+// AggregateError is a collection of errors that are aggregated in a single
+// error.
+type AggregateError []error
+
+// Error implements the error interface. It aggregates the messages of multiple
+// errors into a single error string.
+func (e AggregateError) Error() string {
+	if len(e) == 1 {
+		return e[0].Error()
+	}
+
+	errStrings := make([]string, len(e))
+	for i, err := range e {
+		errStrings[i] = fmt.Sprintf("* %s", err)
+	}
+
+	return fmt.Sprintf(
+		"%d promises rejected due to errors:\n%s",
+		len(e), strings.Join(errStrings, "\n"))
+}
+
+// Any takes a slice of promises and, as soon as one of the promises in the
+// slice fulfills, returns a single promise that resolves with the value from
+// that promise. If no promises in the slice fulfill (if all of the given
+// promises are rejected), then the returned promise is rejected with an
+// AggregateError, containing all rejection reasons of individual promises.
+// Essentially, this func does the opposite of All.
+func Any(promises ...*Promise) *Promise {
+	if len(promises) == 0 {
+		return Resolve(nil)
+	}
+
+	return New(func(resolve ResolveFunc, reject RejectFunc) {
+		valChan := make(chan Value, len(promises))
+		errChan := make(chan indexedValue, len(promises))
+
+		for i, promise := range promises {
+			idx := i
+
+			promise.Then(func(val Value) Value {
+				valChan <- val
+				return val
+			}).Catch(func(err error) Value {
+				errChan <- indexedValue{idx, err}
+				return err
+			})
+		}
+
+		errors := make(AggregateError, len(promises))
+
+		for i := 0; i < len(promises); i++ {
+			select {
+			case val := <-valChan:
+				resolve(val)
+				return
+			case err := <-errChan:
+				errors[err.index] = err.value.(error)
+			}
+		}
+
+		reject(errors)
 	})
 }
 
