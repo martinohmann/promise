@@ -1,6 +1,7 @@
 package promise
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 )
@@ -39,8 +40,20 @@ type RejectFunc func(val error)
 // in order to trigger the resolution of a given promise. Subsequent calls to
 // `resolve` or `reject` are ignored. Not calling any of the two leaves the
 // promise in a pending state. A panic in the ResolutionFunc will be recovered
-// and causes the promise to be reject with the panic message.
+// and causes the promise to be reject with the panic message. ResolutionFunc
+// itself implements Thenable.
 type ResolutionFunc func(resolve ResolveFunc, reject RejectFunc)
+
+// Then implements Thenable.
+func (f ResolutionFunc) Then(resolve ResolveFunc, reject RejectFunc) {
+	f(resolve, reject)
+}
+
+// A Thenable is a special kind of handler that can be returned during promise
+// resolution/rejection.
+type Thenable interface {
+	Then(resolve ResolveFunc, reject RejectFunc)
+}
 
 // A Promise represents the eventual completion (or failure) of an asynchronous
 // operation, and its resulting value.
@@ -98,6 +111,11 @@ func (p *Promise) resolve(val Value) {
 	p.resolveLocked(val)
 }
 
+// ErrCircularResolutionChain is the error that a promise is rejected with if a
+// circular resolution dependency is detected, that is: an attempt to resolve
+// or reject an promise with itself at arbitrary depth it the chain.
+var ErrCircularResolutionChain = errors.New("circular resolution chain: a promise cannot be resolved or rejected with itself")
+
 // resolveLocked resolves the promise. The lock must be held when calling this
 // method. This is a performance optimization to avoid releasing the lock when
 // val causes the promise to be rejected, e.g. because it is an err value or a
@@ -112,7 +130,20 @@ func (p *Promise) resolveLocked(val Value) {
 	case error:
 		p.rejectLocked(v)
 		return
+	case Thenable:
+		val, err := New(v.Then).Await()
+		if err != nil {
+			p.rejectLocked(err)
+			return
+		}
+
+		p.value = val
 	case *Promise:
+		if v == p {
+			p.rejectLocked(ErrCircularResolutionChain)
+			return
+		}
+
 		val, err := v.Await()
 		if err != nil {
 			p.rejectLocked(err)
@@ -138,7 +169,20 @@ func (p *Promise) resolveLocked(val Value) {
 		case error:
 			p.rejectLocked(v)
 			return
+		case Thenable:
+			val, err := New(v.Then).Await()
+			if err != nil {
+				p.rejectLocked(err)
+				return
+			}
+
+			p.value = val
 		case *Promise:
+			if v == p {
+				p.rejectLocked(ErrCircularResolutionChain)
+				return
+			}
+
 			val, err := v.Await()
 			if err != nil {
 				p.rejectLocked(err)
@@ -183,7 +227,20 @@ func (p *Promise) rejectLocked(err error) {
 		res := h.onRejected(p.err)
 
 		switch v := res.(type) {
+		case Thenable:
+			val, err := New(v.Then).Await()
+			if err == nil {
+				p.resolveLocked(val)
+				return
+			}
+
+			p.err = err
 		case *Promise:
+			if v == p {
+				p.rejectLocked(ErrCircularResolutionChain)
+				return
+			}
+
 			val, err := v.Await()
 			if err == nil {
 				p.resolveLocked(val)
@@ -225,7 +282,7 @@ func (p *Promise) Await() (Value, error) {
 // handlers to be created for these cases. Returning non-nil errors, rejected
 // promises or panics in the onFulfilled handler will reject the promise. Any
 // other value will be passed to the next onFulfilled handler in the chain,
-// eventually resolving the promise if there are now more handlers left.
+// eventually resolving the promise if there are no more handlers left.
 // Similarly, non-nil errors and rejected promises returned by or panics during
 // the execution of the onRejected handler will result in the promise to be
 // rejected, whereas any value different from these will recover from the
