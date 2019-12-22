@@ -212,23 +212,13 @@ func (p *promise) resolveValue(val Value) (Value, error) {
 	case error:
 		return nil, v
 	case Thenable:
-		val, err := New(v.Then).Await()
-		if err != nil {
-			return nil, err
-		}
-
-		return val, nil
+		return New(v.Then).Await()
 	case Promise:
 		if v == p {
 			return nil, ErrCircularResolutionChain
 		}
 
-		val, err := v.Await()
-		if err != nil {
-			return nil, err
-		}
-
-		return val, nil
+		return v.Await()
 	default:
 		return v, nil
 	}
@@ -266,34 +256,13 @@ func (p *promise) rejectLocked(err error) {
 
 		res := h.onRejected(p.err)
 
-		switch v := res.(type) {
-		case Thenable:
-			val, err := New(v.Then).Await()
-			if err == nil {
-				p.resolveLocked(val)
-				return
-			}
-
-			p.err = err
-		case Promise:
-			if v == p {
-				p.rejectLocked(ErrCircularResolutionChain)
-				return
-			}
-
-			val, err := v.Await()
-			if err == nil {
-				p.resolveLocked(val)
-				return
-			}
-
-			p.err = err
-		case error:
-			p.err = v
-		default:
-			p.resolveLocked(v)
+		val, err := p.resolveValue(res)
+		if err == nil {
+			p.resolveLocked(val)
 			return
 		}
+
+		p.err = err
 	}
 
 	p.state = rejected

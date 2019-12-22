@@ -436,19 +436,6 @@ func TestPromise(t *testing.T) {
 			},
 		},
 		{
-			name:     "resolve promise with a thenable #2",
-			expected: "foo",
-			setup: func(t *testing.T) Promise {
-				thenable := ResolutionFunc(func(resolve ResolveFunc, reject RejectFunc) {
-					resolve("foo")
-				})
-
-				return Resolve(2).Then(func(val Value) Value {
-					return thenable
-				})
-			},
-		},
-		{
 			name:        "reject promise with a thenable",
 			expectedErr: errors.New("foo"),
 			setup: func(t *testing.T) Promise {
@@ -488,19 +475,6 @@ func TestPromise(t *testing.T) {
 			},
 		},
 		{
-			name:        "resolve promise with a thenable which rejects #2",
-			expectedErr: errors.New("foo"),
-			setup: func(t *testing.T) Promise {
-				thenable := ResolutionFunc(func(resolve ResolveFunc, reject RejectFunc) {
-					reject(errors.New("foo"))
-				})
-
-				return Resolve(2).Then(func(val Value) Value {
-					return thenable
-				})
-			},
-		},
-		{
 			name:        "a promise cannot be resolved with itself",
 			expectedErr: ErrCircularResolutionChain,
 			setup: func(t *testing.T) Promise {
@@ -510,20 +484,6 @@ func TestPromise(t *testing.T) {
 				})
 
 				return p.Then(func(val Value) Value {
-					return p
-				})
-			},
-		},
-		{
-			name:        "a promise cannot be resolved with itself #2",
-			expectedErr: ErrCircularResolutionChain,
-			setup: func(t *testing.T) Promise {
-				p := New(func(resolve ResolveFunc, reject RejectFunc) {
-					time.Sleep(100 * time.Millisecond)
-					reject(errors.New("foo"))
-				})
-
-				return p.Catch(func(err error) Value {
 					return p
 				})
 			},
