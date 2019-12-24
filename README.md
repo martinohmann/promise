@@ -6,8 +6,23 @@ Promise
 [![GoDoc](https://godoc.org/github.com/martinohmann/promise?status.svg)](https://godoc.org/github.com/martinohmann/promise)
 [![Go Report Card](https://goreportcard.com/badge/github.com/martinohmann/promise)](https://goreportcard.com/report/github.com/martinohmann/promise)
 
-This is an experiment to better understand the inner workings of JavaScript
-promises and how this can be implemented from scratch in go.
+Initially this started out as an experiment to better understand the inner workings of
+JavaScript promises and how this can be implemented from scratch in go.
+
+The result is a promise implementation which follows the [Promises/A+
+Standard](https://promisesaplus.com/) and comes with the following additional
+features:
+
+* Waiting for promise resolution.
+* `Race`, `All`, `Any` and `AllSettled` extensions to handle the parallel
+  resolution of multiple promises.
+* Promise instrumentation for tracing, logging and debugging. See the
+  [`instrumented`](https://godoc.org/github.com/martinohmann/promise/instrumented)
+  package documentation for more information.
+
+Head over to the [`promise`
+godoc](https://godoc.org/github.com/martinohmann/promise) for the API
+documentation.
 
 Installation
 ------------
@@ -20,6 +35,51 @@ Usage
 -----
 
 Check out the examples in the [_examples/](_examples/) directory to see promises in action.
+
+### Simple example
+
+```go
+package main
+
+import (
+	"fmt"
+	"math/rand"
+	"time"
+
+	"github.com/martinohmann/promise"
+)
+
+func init() {
+	rand.Seed(time.Now().UnixNano())
+}
+
+func main() {
+	p := promise.New(func(resolve promise.ResolveFunc, reject promise.RejectFunc) {
+		// simulate some computation
+		sleepDuration := time.Duration(rand.Int63n(2000)) * time.Millisecond
+		time.Sleep(sleepDuration)
+
+		fmt.Printf("computation took %s\n", sleepDuration)
+
+		// inject some random errors
+		if rand.Int63n(2) == 0 {
+			reject(errors.New("computation failed"))
+			return
+		}
+
+		// simulate computation result
+		resolve(rand.Int63())
+	})
+
+	// Wait for the promise resolution to be complete, that is: either fulfillment or rejection.
+	val, err := p.Await()
+	if err != nil {
+		fmt.Printf("Promise rejected with error: %v\n", err)
+	} else {
+		fmt.Printf("Promise fulfilled with value: %d\n", val.(int64))
+	}
+}
+```
 
 License
 -------
