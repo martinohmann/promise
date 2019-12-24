@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/martinohmann/promise/_examples/instrumentation"
+
 	// Drop in replacement for github.com/martinohmann/promise. Exports the
 	// same symbols as the promise package.
 	promise "github.com/martinohmann/promise/instrumented"
