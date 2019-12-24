@@ -14,6 +14,9 @@ Standard](https://promisesaplus.com/) and comes with the following additional
 features:
 
 * Waiting for promise resolution.
+* Panics during promise resolution cause the promise to be rejected with the
+  panic message.
+* Nested promise resolution.
 * `Race`, `All`, `Any` and `AllSettled` extensions to handle the parallel
   resolution of multiple promises.
 * Promise instrumentation for tracing, logging and debugging. See the
