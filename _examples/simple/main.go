@@ -29,6 +29,12 @@ func main() {
 
 		// simulate computation result
 		resolve(rand.Int63())
+	}).Then(func(val promise.Value) promise.Value {
+		fmt.Printf("computation result: %d\n", val.(int64))
+		return val
+	}).Catch(func(err error) promise.Value {
+		fmt.Printf("error during computation: %v\n", err)
+		return err
 	})
 
 	// Wait for the promise resolution to be complete, that is: either fulfillment or rejection.

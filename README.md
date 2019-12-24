@@ -17,8 +17,9 @@ features:
 * `Race`, `All`, `Any` and `AllSettled` extensions to handle the parallel
   resolution of multiple promises.
 * Promise instrumentation for tracing, logging and debugging. See the
-  [`instrumented`](https://godoc.org/github.com/martinohmann/promise/instrumented)
-  package documentation for more information.
+  [`instrumented` package
+  documentation](https://godoc.org/github.com/martinohmann/promise/instrumented)
+  for more information.
 
 Head over to the [`promise`
 godoc](https://godoc.org/github.com/martinohmann/promise) for the API
@@ -42,6 +43,7 @@ Check out the examples in the [_examples/](_examples/) directory to see promises
 package main
 
 import (
+	"errors"
 	"fmt"
 	"math/rand"
 	"time"
@@ -69,6 +71,12 @@ func main() {
 
 		// simulate computation result
 		resolve(rand.Int63())
+	}).Then(func(val promise.Value) promise.Value {
+		fmt.Printf("computation result: %d\n", val.(int64))
+		return val
+	}).Catch(func(err error) promise.Value {
+		fmt.Printf("error during computation: %v\n", err)
+		return err
 	})
 
 	// Wait for the promise resolution to be complete, that is: either fulfillment or rejection.
