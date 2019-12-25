@@ -488,6 +488,15 @@ func TestPromise(t *testing.T) {
 				})
 			},
 		},
+		{
+			name: "reject with nil error fulfills promise",
+			setup: func(t *testing.T) Promise {
+				return Reject(nil).Catch(func(err error) Value {
+					t.Fatalf("unexpected execution of Catch callback with err: %#v", err)
+					return err
+				})
+			},
+		},
 	}
 
 	for _, test := range tests {
