@@ -151,6 +151,9 @@ func TestInstrumentedPromise_WrapDelegate(t *testing.T) {
 }
 
 func TestInstrumentedPromise_WrapOther(t *testing.T) {
+	AddInstrumentationHandlers(noopHandler)
+	defer RemoveInstrumentationHandlers()
+
 	p := promise.Resolve(42)
 	q := promise.Resolve(23)
 
@@ -159,7 +162,12 @@ func TestInstrumentedPromise_WrapOther(t *testing.T) {
 		delegate:        p,
 	}
 
-	if instrumented.wrap(q) == instrumented {
+	wrapped := instrumented.wrap(q)
+	if wrapped == instrumented {
 		t.Fatalf("expected promises to be the different")
+	}
+
+	if wrapped.(*instrumentedPromise).uuid != instrumented.uuid {
+		t.Fatalf("expected uuids to be the same")
 	}
 }

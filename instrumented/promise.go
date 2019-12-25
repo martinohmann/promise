@@ -32,7 +32,10 @@ func (p *instrumentedPromise) wrap(candidate Promise) Promise {
 		return p
 	}
 
-	return p.instrumentation.Wrap(candidate)
+	// Wrap it and set the UUID of p on the wrapped promise.
+	return p.instrumentation.wrap(candidate, func() string {
+		return p.uuid
+	})
 }
 
 func (p *instrumentedPromise) onRejectedFunc(onRejected OnRejectedFunc) OnRejectedFunc {

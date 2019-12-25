@@ -164,6 +164,12 @@ func (i *Instrumentation) Reject(err error) Promise {
 // instrumentation. If the provided promise is already instrumented, the newly
 // wrapped promise will adpot the UUID of the delegate.
 func (i *Instrumentation) Wrap(delegate Promise) Promise {
+	return i.wrap(delegate, func() string {
+		return uuid.New().String()
+	})
+}
+
+func (i *Instrumentation) wrap(delegate Promise, newUUID func() string) Promise {
 	if len(i.Handlers()) == 0 {
 		// If the instrumentation has no handlers there is no point in wrapping
 		// the delegate promise as this would just introduce unnecessary
@@ -196,7 +202,7 @@ func (i *Instrumentation) Wrap(delegate Promise) Promise {
 	// Wrap it and assign a new UUID.
 	return &instrumentedPromise{
 		delegate:        delegate,
-		uuid:            uuid.New().String(),
+		uuid:            newUUID(),
 		instrumentation: i,
 	}
 }
