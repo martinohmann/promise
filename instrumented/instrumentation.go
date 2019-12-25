@@ -31,10 +31,6 @@ type Invocation struct {
 	// to be able to inspect the promise for debugging or tracing.
 	Promise Promise
 
-	// Subject is the subject of the invocation, that is: a function name (e.g.
-	// Await) or a handler type (e.g. onFulfilled).
-	Subject string
-
 	// SubjectInfo contains information about the subject of the invocation.
 	// This is usually a promise resolution handler like onFulfilled or the
 	// Await method of a promise.
