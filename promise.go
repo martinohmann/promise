@@ -60,7 +60,7 @@ type Promise interface {
 	// handlers to be created for these cases. Returning non-nil errors, rejected
 	// promises or panics in the onFulfilled handler will reject the promise. Any
 	// other value will be passed to the next onFulfilled handler in the chain,
-	// eventually resolving the promise if there are no more handlers left.
+	// eventually fulfilling the promise if there are no more handlers left.
 	// Similarly, non-nil errors and rejected promises returned by or panics during
 	// the execution of the onRejected handler will result in the promise to be
 	// rejected, whereas any value different from these will recover from the
@@ -154,9 +154,9 @@ func (p *promise) resolve(val Value) {
 }
 
 // ErrCircularResolutionChain is the error that a promise is rejected with if a
-// circular resolution dependency is detected, that is: an attempt to resolve
+// circular resolution dependency is detected, that is: an attempt to fulfill
 // or reject an promise with itself at arbitrary depth it the chain.
-var ErrCircularResolutionChain = errors.New("circular resolution chain: a promise cannot be resolved or rejected with itself")
+var ErrCircularResolutionChain = errors.New("circular resolution chain: a promise cannot be resolved with itself")
 
 // resolveLocked resolves the promise. The lock must be held when calling this
 // method. This is a performance optimization to avoid releasing the lock when
@@ -181,7 +181,7 @@ func (p *promise) resolveLocked(val Value) {
 		h := p.popHandler()
 		if h.onFulfilled == nil {
 			// This is an onRejected handler which gets ignored since we are
-			// trying to resolve the promise. We must discard it or we might
+			// trying to fulfill the promise. We must discard it or we might
 			// get weird behaviour later on.
 			continue
 		}
@@ -235,10 +235,15 @@ func (p *promise) reject(err error) {
 
 // rejectLocked rejects the promise. The lock must be held when calling this
 // method. This is a performance optimization to avoid releasing the lock when
-// val is a promise that resolves. This is necessary to be able to recover from
-// a rejected promise in a catch-handler.
+// val is a promise that needs to be resolved. This is necessary to be able to
+// recover from a rejected promise in a catch-handler.
 func (p *promise) rejectLocked(err error) {
 	if p.state != pending {
+		return
+	}
+
+	if err == nil {
+		p.resolveLocked(nil)
 		return
 	}
 
@@ -328,7 +333,7 @@ func (p *promise) Finally(fn func()) Promise {
 	})
 }
 
-// Resolve returns a promise that is resolved with given value. If val is a
+// Resolve returns a promise that is fulfilled with given value. If val is a
 // non-nil error or a rejected promise, the promise will be resolved to a
 // rejected promise instead.
 func Resolve(val Value) Promise {
@@ -337,7 +342,8 @@ func Resolve(val Value) Promise {
 	})
 }
 
-// Reject returns a promise that is rejected with given error reason.
+// Reject returns a promise that is rejected with given error reason. If err is
+// nil, the promise will be resolved to a fulfilled promise instead.
 func Reject(err error) Promise {
 	return New(func(_ ResolveFunc, reject RejectFunc) {
 		reject(err)
