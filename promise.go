@@ -1,3 +1,7 @@
+// Package promise provides a promise implementation that follows the
+// Promises/A+ Standard. In addition it provides extensions to work with groups
+// of promises as well as a promise pool implementation for working with large
+// numbers of concurrent promise resolutions.
 package promise
 
 import (
