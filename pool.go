@@ -44,7 +44,7 @@ type PoolOptions struct {
 // panic. Nil funcs or nil promises returned by the funcs from the channel will
 // also cause panics when Run is called on the pool. Accepts optional pool
 // options as the third argument.
-func NewPool(concurrency int64, fns <-chan func() Promise, opts ...PoolOptions) *Pool {
+func NewPool(concurrency int, fns <-chan func() Promise, opts ...PoolOptions) *Pool {
 	if concurrency <= 0 {
 		panic("concurrency must be greater than 0")
 	}

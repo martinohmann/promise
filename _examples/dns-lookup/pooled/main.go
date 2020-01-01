@@ -15,7 +15,7 @@ import (
 )
 
 var resolverAddr = flag.String("resolver", "", "Address of the DNS resolver to use. If omitted, the default resolver is used. Format: <ipv4-address>[:<port>]")
-var concurrency = flag.Int64("concurrency", 10, "Number of DNS lookups to perform concurrently")
+var concurrency = flag.Int("concurrency", 10, "Number of DNS lookups to perform concurrently")
 
 func init() {
 	flag.Usage = func() {
