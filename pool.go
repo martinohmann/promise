@@ -27,30 +27,48 @@ type Pool struct {
 	fns       <-chan func() Promise
 	listeners []*PoolEventListener
 	promise   Promise
+	options   PoolOptions
+}
+
+// PoolOptions configure the behaviour of a promise pool.
+type PoolOptions struct {
+	// ContinueOnError controls whether promise rejections will cause the pool
+	// to stop consuming more promise factory funcs or not. If true, rejections
+	// are ignored. This is useful if errors are handled by other means. The
+	// default is to abort on the first rejected promise.
+	ContinueOnError bool
 }
 
 // NewPool creates a new promise pool with given concurrency and channel which
 // provides promise factory funcs. Negative concurrency values will cause a
 // panic. Nil funcs or nil promises returned by the funcs from the channel will
-// also cause panics when Run is called on the pool.
-func NewPool(concurrency int64, fns <-chan func() Promise) *Pool {
+// also cause panics when Run is called on the pool. Accepts optional pool
+// options as the third argument.
+func NewPool(concurrency int64, fns <-chan func() Promise, opts ...PoolOptions) *Pool {
 	if concurrency <= 0 {
 		panic("concurrency must be greater than 0")
 	}
 
+	var options PoolOptions
+	if len(opts) > 0 {
+		options = opts[0]
+	}
+
 	return &Pool{
-		fns:    fns,
-		sem:    make(chan struct{}, concurrency),
-		done:   make(chan struct{}),
-		result: make(chan Result),
+		fns:     fns,
+		sem:     make(chan struct{}, concurrency),
+		done:    make(chan struct{}),
+		result:  make(chan Result),
+		options: options,
 	}
 }
 
 // Run starts the pool. This will consume the funcs from the channel provided
 // to NewPool with the configured concurrency. It returns a promise which
 // fulfills once the channel providing the promise factory funcs is closed. The
-// promise rejects upon the first error encountered or if ctx is cancelled. Run
-// must only be called once. Subsequent calls to it will panic.
+// promise rejects upon the first error encountered (unless ContinueOnError was
+// set in the PoolOptions passed to NewPool) or if ctx is cancelled. Run must
+// only be called once. Subsequent calls to it will panic.
 func (p *Pool) Run(ctx context.Context) Promise {
 	if p.promise != nil {
 		panic("promise pool cannot be started twice")
@@ -120,13 +138,15 @@ func (p *Pool) execute(fn func() Promise) {
 	}).Catch(func(err error) Value {
 		p.dispatchRejection(err)
 
-		// Use a select with default to prevent blocking in the case where a
-		// result was already sent by another catch handler. We would discard
-		// it anyways as the first error by any promise immediately rejects the
-		// pool promise. Also, we avoid leaking a goroutine by that.
-		select {
-		case p.result <- Result{Err: err}:
-		default:
+		if !p.options.ContinueOnError {
+			// Use a select with default to prevent blocking in the case where a
+			// result was already sent by another catch handler. We would discard
+			// it anyways as the first error by any promise immediately rejects the
+			// pool promise. Also, we avoid leaking a goroutine by that.
+			select {
+			case p.result <- Result{Err: err}:
+			default:
+			}
 		}
 
 		<-p.sem
@@ -160,8 +180,12 @@ func (p *Pool) dispatchRejection(err error) {
 }
 
 // AddEventListener adds listener to the pool. Will not add it again if
-// listener is already present.
+// listener is already present. Panics if listener is nil.
 func (p *Pool) AddEventListener(listener *PoolEventListener) {
+	if listener == nil {
+		panic("listener must be non-nil")
+	}
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
