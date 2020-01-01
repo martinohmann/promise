@@ -3,7 +3,6 @@ package promise
 import (
 	"context"
 	"sync"
-	"sync/atomic"
 )
 
 // PoolEventListener can be attached to a promise pool to listen for
@@ -27,7 +26,7 @@ type Pool struct {
 	result    chan Result
 	fns       <-chan func() Promise
 	listeners []*PoolEventListener
-	started   int32
+	promise   Promise
 }
 
 // NewPool creates a new promise pool with given concurrency and channel which
@@ -53,11 +52,11 @@ func NewPool(concurrency int64, fns <-chan func() Promise) *Pool {
 // promise rejects upon the first error encountered or if ctx is cancelled. Run
 // must only be called once. Subsequent calls to it will panic.
 func (p *Pool) Run(ctx context.Context) Promise {
-	if !atomic.CompareAndSwapInt32(&p.started, 0, 1) {
+	if p.promise != nil {
 		panic("promise pool cannot be started twice")
 	}
 
-	promise := New(func(resolve ResolveFunc, reject RejectFunc) {
+	p.promise = New(func(resolve ResolveFunc, reject RejectFunc) {
 		defer func() {
 			p.mu.Lock()
 			p.listeners = nil
@@ -80,14 +79,12 @@ func (p *Pool) Run(ctx context.Context) Promise {
 
 	go p.run(ctx)
 
-	return promise
+	return p.promise
 }
 
 func (p *Pool) run(ctx context.Context) {
 	for {
 		select {
-		case <-p.done:
-			return
 		case fn, ok := <-p.fns:
 			if !ok {
 				// Fns channel was closed, we need to stop. By consuming all
@@ -106,10 +103,10 @@ func (p *Pool) run(ctx context.Context) {
 			case p.sem <- struct{}{}:
 				p.execute(fn)
 			case <-p.done:
-				// One of the promises that are currently in flight rejected
-				// which in turn caused the pool promise to reject while
-				// waiting for sem. We exit here as there is no point in
-				// continuing.
+				// One of the promises that are currently in flight rejected or
+				// ctx was cancelled which in turn caused the pool promise to
+				// reject while waiting for sem. We exit here as there is no
+				// point in continuing.
 				return
 			}
 		}
