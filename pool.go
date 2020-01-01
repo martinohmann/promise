@@ -75,12 +75,7 @@ func (p *Pool) Run(ctx context.Context) Promise {
 	}
 
 	p.promise = New(func(resolve ResolveFunc, reject RejectFunc) {
-		defer func() {
-			p.mu.Lock()
-			p.listeners = nil
-			close(p.done)
-			p.mu.Unlock()
-		}()
+		defer close(p.done)
 
 		select {
 		case res := <-p.result:
@@ -102,29 +97,40 @@ func (p *Pool) Run(ctx context.Context) Promise {
 
 func (p *Pool) run(ctx context.Context) {
 	for {
-		fn, ok := <-p.fns
-		if !ok {
-			// Fns channel was closed, we need to stop. By consuming all
-			// semaphores we make sure that all promises that are currently
-			// in flight resolved before we send the final result.
-			for i := 0; i < cap(p.sem); i++ {
-				p.sem <- struct{}{}
+		select {
+		case <-p.done:
+			return
+		case fn, ok := <-p.fns:
+			if !ok {
+				// Fns channel was closed, we need to stop. By consuming all
+				// semaphores we make sure that all promises that are currently
+				// in flight resolved before we send the final result.
+				for i := 0; i < cap(p.sem); i++ {
+					p.sem <- struct{}{}
+				}
+
+				// If the pool promise was already rejected by an error we
+				// might leak a goroutine here when pushing the result into the
+				// channel as there is no consumer for it anymore. To avoid
+				// that, we also return if we are already done.
+				select {
+				case p.result <- Result{}:
+					return
+				case <-p.done:
+					return
+				}
 			}
 
-			p.result <- Result{}
-			return
-		}
-
-		// Wait for a semaphore before executing the promise factory func.
-		select {
-		case p.sem <- struct{}{}:
-			p.execute(fn)
-		case <-p.done:
-			// One of the promises that are currently in flight rejected or
-			// ctx was cancelled which in turn caused the pool promise to
-			// reject while waiting for sem. We exit here as there is no
-			// point in continuing.
-			return
+			// Wait for a semaphore before executing the promise factory func.
+			select {
+			case p.sem <- struct{}{}:
+				p.execute(fn)
+			case <-p.done:
+				// One of the promises that are currently in flight rejected or
+				// ctx was cancelled which in turn caused the pool promise to
+				// reject while waiting for sem. We must return here.
+				return
+			}
 		}
 	}
 }

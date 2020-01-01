@@ -7,9 +7,13 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"go.uber.org/goleak"
 )
 
 func TestPool_invalidConcurrency_Panic(t *testing.T) {
+	defer goleak.VerifyNoLeaks(t)
+
 	fns := make(chan func() Promise)
 
 	defer func() {
@@ -22,26 +26,35 @@ func TestPool_invalidConcurrency_Panic(t *testing.T) {
 }
 
 func TestPool(t *testing.T) {
+	defer goleak.VerifyNoLeaks(t)
+
 	fns := make(chan func() Promise)
 
 	var fulfilled int64
 
 	pool := NewPool(10, fns)
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	go func() {
 		defer close(fns)
 
 		for i := 0; i < 10; i++ {
-			fns <- func() Promise {
+			select {
+			case fns <- func() Promise {
 				return Resolve(nil).Then(func(val Value) Value {
 					atomic.AddInt64(&fulfilled, 1)
 					return val
 				})
+			}:
+			case <-ctx.Done():
+				return
 			}
 		}
 	}()
 
-	p := pool.Run(context.Background())
+	p := pool.Run(ctx)
 
 	_, err := awaitWithTimeout(t, p, 2*time.Second)
 	if err != nil {
@@ -54,28 +67,40 @@ func TestPool(t *testing.T) {
 }
 
 func TestPool_RunTwicePanic(t *testing.T) {
+	defer goleak.VerifyNoLeaks(t)
+
 	defer func() {
 		if r := recover(); r == nil {
 			t.Fatal("expected panic")
 		}
 	}()
+
 	fns := make(chan func() Promise)
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	pool := NewPool(10, fns)
-	pool.Run(context.Background())
-	pool.Run(context.Background())
+	pool.Run(ctx)
+	pool.Run(ctx)
 }
 
 func TestPool_Error(t *testing.T) {
+	defer goleak.VerifyNoLeaks(t)
+
 	fns := make(chan func() Promise)
 
 	pool := NewPool(10, fns)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	go func() {
 		defer close(fns)
 
 		for i := 0; i < 10; i++ {
-			fns <- func(val int) func() Promise {
+			select {
+			case fns <- func(val int) func() Promise {
 				return func() Promise {
 					if val < 5 {
 						return Resolve(nil)
@@ -83,11 +108,14 @@ func TestPool_Error(t *testing.T) {
 
 					return Reject(fmt.Errorf("error in %d", val))
 				}
-			}(i)
+			}(i):
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
 
-	p := pool.Run(context.Background())
+	p := pool.Run(ctx)
 
 	errPattern := `^error in [5-9]$`
 
@@ -102,17 +130,23 @@ func TestPool_Error(t *testing.T) {
 }
 
 func TestPool_ContextCancel(t *testing.T) {
+	defer goleak.VerifyNoLeaks(t)
+
 	fns := make(chan func() Promise)
 
 	pool := NewPool(10, fns)
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	defer close(done)
 
 	go func() {
 		defer close(fns)
 		fns <- func() Promise {
 			return New(func(resolve ResolveFunc, reject RejectFunc) {
-				time.Sleep(500 * time.Millisecond)
+				<-done
 				resolve("done")
 			})
 		}
@@ -132,6 +166,8 @@ func TestPool_ContextCancel(t *testing.T) {
 }
 
 func TestPool_ContinueOnError(t *testing.T) {
+	defer goleak.VerifyNoLeaks(t)
+
 	fns := make(chan func() Promise)
 
 	var fulfilled int64
@@ -148,11 +184,15 @@ func TestPool_ContinueOnError(t *testing.T) {
 		},
 	})
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	go func() {
 		defer close(fns)
 
 		for i := 0; i < 10; i++ {
-			fns <- func(val int) func() Promise {
+			select {
+			case fns <- func(val int) func() Promise {
 				return func() Promise {
 					if val%2 == 0 {
 						return Resolve(nil)
@@ -160,11 +200,14 @@ func TestPool_ContinueOnError(t *testing.T) {
 
 					return Reject(fmt.Errorf("error in %d", val))
 				}
-			}(i)
+			}(i):
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
 
-	p := pool.Run(context.Background())
+	p := pool.Run(ctx)
 
 	_, err := awaitWithTimeout(t, p, 2*time.Second)
 	if err != nil {
@@ -183,6 +226,8 @@ func TestPool_ContinueOnError(t *testing.T) {
 }
 
 func TestPool_AddEventListener(t *testing.T) {
+	defer goleak.VerifyNoLeaks(t)
+
 	fns := make(chan func() Promise)
 
 	var fulfilled int64
@@ -197,17 +242,21 @@ func TestPool_AddEventListener(t *testing.T) {
 		},
 	}
 
-	pool := NewPool(10, fns)
+	pool := NewPool(1, fns)
 
 	// double add on purpose
 	pool.AddEventListener(listener)
 	pool.AddEventListener(listener)
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	go func() {
 		defer close(fns)
 
 		for i := 0; i < 10; i++ {
-			fns <- func(val int) func() Promise {
+			select {
+			case fns <- func(val int) func() Promise {
 				return func() Promise {
 					if val < 5 {
 						return Resolve(nil)
@@ -215,11 +264,14 @@ func TestPool_AddEventListener(t *testing.T) {
 
 					return Reject(fmt.Errorf("error in %d", val))
 				}
-			}(i)
+			}(i):
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
 
-	p := pool.Run(context.Background())
+	p := pool.Run(ctx)
 
 	_, err := awaitWithTimeout(t, p, 2*time.Second)
 	if err == nil {
@@ -238,6 +290,8 @@ func TestPool_AddEventListener(t *testing.T) {
 }
 
 func TestPool_AddEventListener_nilListener(t *testing.T) {
+	defer goleak.VerifyNoLeaks(t)
+
 	defer func() {
 		if r := recover(); r == nil {
 			t.Fatal("expected panic")
@@ -248,6 +302,8 @@ func TestPool_AddEventListener_nilListener(t *testing.T) {
 }
 
 func TestPool_RemoveEventListener(t *testing.T) {
+	defer goleak.VerifyNoLeaks(t)
+
 	fns := make(chan func() Promise)
 
 	listener := &PoolEventListener{
