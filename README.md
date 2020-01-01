@@ -19,6 +19,9 @@ features:
 * Nested promise resolution.
 * `Race`, `All`, `Any` and `AllSettled` extensions to handle the parallel
   resolution of multiple promises.
+* Promise pooling. See the [`promise.Pool`
+* documentation](https://godoc.org/github.com/martinohmann/promise#Pool)
+* and the [pooling example](_examples/dns-lookup/pooled/main.go).
 * Promise instrumentation for tracing, logging and debugging. See the
   [`instrumented` package
   documentation](https://godoc.org/github.com/martinohmann/promise/instrumented)
