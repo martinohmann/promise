@@ -1,6 +1,7 @@
 package promise
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"testing"
@@ -19,8 +20,11 @@ func TestRace_Empty(t *testing.T) {
 }
 
 func TestRace_Resolve(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	promiseA := New(func(resolve ResolveFunc, reject RejectFunc) {
-		time.Sleep(1 * time.Second)
+		<-ctx.Done()
 		resolve("foo")
 	})
 
@@ -29,7 +33,7 @@ func TestRace_Resolve(t *testing.T) {
 	})
 
 	promiseC := New(func(resolve ResolveFunc, reject RejectFunc) {
-		time.Sleep(500 * time.Millisecond)
+		<-ctx.Done()
 		reject(errors.New("baz"))
 	})
 
@@ -48,13 +52,16 @@ func TestRace_Resolve(t *testing.T) {
 }
 
 func TestRace_Reject(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	promiseA := New(func(resolve ResolveFunc, reject RejectFunc) {
-		time.Sleep(1 * time.Second)
+		<-ctx.Done()
 		resolve("foo")
 	})
 
 	promiseB := New(func(resolve ResolveFunc, reject RejectFunc) {
-		time.Sleep(500 * time.Millisecond)
+		<-ctx.Done()
 		reject(errors.New("baz"))
 	})
 
