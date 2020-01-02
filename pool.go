@@ -20,14 +20,16 @@ type PoolEventListener struct {
 // supervises their resolution. It ensures that only a configurable number of
 // promises will be resolved concurrently.
 type Pool struct {
+	promise Promise
+	options PoolOptions
+
+	sem    chan struct{}
+	done   chan struct{}
+	result chan Result
+	fns    <-chan func() Promise
+
 	mu        sync.Mutex
-	sem       chan struct{}
-	done      chan struct{}
-	result    chan Result
-	fns       <-chan func() Promise
-	listeners []*PoolEventListener
-	promise   Promise
-	options   PoolOptions
+	listeners []*PoolEventListener // guarded by mu
 }
 
 // PoolOptions configure the behaviour of a promise pool.
@@ -46,7 +48,7 @@ type PoolOptions struct {
 // options as the third argument.
 func NewPool(concurrency int, fns <-chan func() Promise, opts ...PoolOptions) *Pool {
 	if concurrency <= 0 {
-		panic("concurrency must be greater than 0")
+		panic("promise.NewPool: concurrency must be greater than 0")
 	}
 
 	var options PoolOptions
@@ -67,11 +69,12 @@ func NewPool(concurrency int, fns <-chan func() Promise, opts ...PoolOptions) *P
 // to NewPool with the configured concurrency. It returns a promise which
 // fulfills once the channel providing the promise factory funcs is closed. The
 // promise rejects upon the first error encountered (unless ContinueOnError was
-// set in the PoolOptions passed to NewPool) or if ctx is cancelled. Run must
-// only be called once. Subsequent calls to it will panic.
+// set in the PoolOptions passed to NewPool) or if ctx is cancelled. Upon
+// fulfillment, the promise's value will always be nil. Run must only be called
+// once. Subsequent calls to it will panic.
 func (p *Pool) Run(ctx context.Context) Promise {
 	if p.promise != nil {
-		panic("promise pool cannot be started twice")
+		panic("promise.Pool: promise pool cannot be started twice")
 	}
 
 	p.promise = New(func(resolve ResolveFunc, reject RejectFunc) {
@@ -189,7 +192,7 @@ func (p *Pool) dispatchRejection(err error) {
 // listener is already present. Panics if listener is nil.
 func (p *Pool) AddEventListener(listener *PoolEventListener) {
 	if listener == nil {
-		panic("listener must be non-nil")
+		panic("promise.Pool: listener must be non-nil")
 	}
 
 	p.mu.Lock()

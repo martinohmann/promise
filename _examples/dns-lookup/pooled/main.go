@@ -42,13 +42,20 @@ func main() {
 	// Make a channel to pass promise factory funcs to the promise pool.
 	fns := make(chan func() promise.Promise)
 
-	p := promise.NewPool(*concurrency, fns)
+	// Instead of aborting on the first lookup error we want to continue.
+	// Errors will be logged to stderr using the event listener attached below.
+	options := promise.PoolOptions{ContinueOnError: true}
+
+	pool := promise.NewPool(*concurrency, fns, options)
 
 	// We add an event listener to the pool so that we can print the values of
-	// all fulfilled promises.
-	p.AddEventListener(&promise.PoolEventListener{
+	// all fulfilled promises and all errors that occur along the way.
+	pool.AddEventListener(&promise.PoolEventListener{
 		OnFulfilled: func(val promise.Value) {
 			fmt.Fprintln(os.Stdout, val)
+		},
+		OnRejected: func(err error) {
+			fmt.Fprintln(os.Stderr, err)
 		},
 	})
 
@@ -80,9 +87,10 @@ func main() {
 	// Start consuming the promise factories from the fns channel. This returns
 	// a promise which we can await. The promise resolves after fns is closed
 	// and all in flight promises resolved. If ctx is cancelled, the promise is
-	// rejected and consuming the fns channel is stopped. The rejection of any
-	// pooled promise also causes the promise to be immediately be rejected.
-	_, err := p.Run(ctx).Await()
+	// rejected and consuming the fns channel is stopped. Without the
+	// ContinueOnError PoolOption we set above, the rejection of any pooled
+	// promise also causes the promise to be immediately be rejected.
+	_, err := pool.Run(ctx).Await()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

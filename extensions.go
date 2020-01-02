@@ -103,7 +103,9 @@ func (e AggregateError) Error() string {
 
 	return fmt.Sprintf(
 		"%d promises rejected due to errors:\n%s",
-		len(e), strings.Join(errStrings, "\n"))
+		len(e),
+		strings.Join(errStrings, "\n"),
+	)
 }
 
 // Any takes a slice of promises and, as soon as one of the promises in the

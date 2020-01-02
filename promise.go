@@ -122,7 +122,7 @@ type handler struct {
 // `reject` will cause the promise to stay in a pending state.
 func New(fn ResolutionFunc) Promise {
 	if fn == nil {
-		panic("resolution func must be non-nil")
+		panic("promise.New: resolution func must be non-nil")
 	}
 
 	p := &promise{

@@ -2,6 +2,7 @@ package promise
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"sync/atomic"
@@ -11,10 +12,14 @@ import (
 	"go.uber.org/goleak"
 )
 
-func TestPool_invalidConcurrency_Panic(t *testing.T) {
-	defer goleak.VerifyNoLeaks(t)
-
+func makePool(concurrency int, options ...PoolOptions) (*Pool, chan func() Promise) {
 	fns := make(chan func() Promise)
+	pool := NewPool(concurrency, fns, options...)
+	return pool, fns
+}
+
+func TestNewPool_Panic(t *testing.T) {
+	defer goleak.VerifyNoLeaks(t)
 
 	defer func() {
 		if r := recover(); r == nil {
@@ -22,17 +27,15 @@ func TestPool_invalidConcurrency_Panic(t *testing.T) {
 		}
 	}()
 
-	NewPool(0, fns)
+	NewPool(0, make(chan func() Promise))
 }
 
 func TestPool(t *testing.T) {
 	defer goleak.VerifyNoLeaks(t)
 
-	fns := make(chan func() Promise)
-
 	var fulfilled int64
 
-	pool := NewPool(10, fns)
+	pool, fns := makePool(10)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -75,12 +78,10 @@ func TestPool_RunTwicePanic(t *testing.T) {
 		}
 	}()
 
-	fns := make(chan func() Promise)
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	pool := NewPool(10, fns)
+	pool, _ := makePool(10)
 	pool.Run(ctx)
 	pool.Run(ctx)
 }
@@ -88,9 +89,7 @@ func TestPool_RunTwicePanic(t *testing.T) {
 func TestPool_Error(t *testing.T) {
 	defer goleak.VerifyNoLeaks(t)
 
-	fns := make(chan func() Promise)
-
-	pool := NewPool(10, fns)
+	pool, fns := makePool(10)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -132,11 +131,9 @@ func TestPool_Error(t *testing.T) {
 func TestPool_ContextCancel(t *testing.T) {
 	defer goleak.VerifyNoLeaks(t)
 
-	fns := make(chan func() Promise)
+	pool, fns := makePool(10)
 
-	pool := NewPool(10, fns)
-
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
 	done := make(chan struct{})
@@ -154,26 +151,19 @@ func TestPool_ContextCancel(t *testing.T) {
 
 	p := pool.Run(ctx)
 
-	go func() {
-		<-time.After(50 * time.Millisecond)
-		cancel()
-	}()
-
 	_, err := awaitWithTimeout(t, p, 2*time.Second)
-	if err == nil {
-		t.Fatal("expected error but got nil")
+	if err != context.DeadlineExceeded {
+		t.Fatalf("expected error %v got %v", context.DeadlineExceeded, err)
 	}
 }
 
 func TestPool_ContinueOnError(t *testing.T) {
 	defer goleak.VerifyNoLeaks(t)
 
-	fns := make(chan func() Promise)
-
 	var fulfilled int64
 	var rejected int64
 
-	pool := NewPool(10, fns, PoolOptions{ContinueOnError: true})
+	pool, fns := makePool(10, PoolOptions{ContinueOnError: true})
 
 	pool.AddEventListener(&PoolEventListener{
 		OnFulfilled: func(val Value) {
@@ -228,8 +218,6 @@ func TestPool_ContinueOnError(t *testing.T) {
 func TestPool_AddEventListener(t *testing.T) {
 	defer goleak.VerifyNoLeaks(t)
 
-	fns := make(chan func() Promise)
-
 	var fulfilled int64
 	var rejected int64
 
@@ -242,7 +230,7 @@ func TestPool_AddEventListener(t *testing.T) {
 		},
 	}
 
-	pool := NewPool(1, fns)
+	pool, fns := makePool(1)
 
 	// double add on purpose
 	pool.AddEventListener(listener)
@@ -304,8 +292,6 @@ func TestPool_AddEventListener_nilListener(t *testing.T) {
 func TestPool_RemoveEventListener(t *testing.T) {
 	defer goleak.VerifyNoLeaks(t)
 
-	fns := make(chan func() Promise)
-
 	listener := &PoolEventListener{
 		OnFulfilled: func(val Value) {
 			t.Fatalf("unexpected call to OnFulfilled with value: %v", val)
@@ -315,7 +301,7 @@ func TestPool_RemoveEventListener(t *testing.T) {
 		},
 	}
 
-	pool := NewPool(10, fns)
+	pool, fns := makePool(10)
 	pool.AddEventListener(listener)
 	pool.RemoveEventListener(listener)
 
@@ -329,5 +315,47 @@ func TestPool_RemoveEventListener(t *testing.T) {
 	_, err := awaitWithTimeout(t, p, 2*time.Second)
 	if err != nil {
 		t.Fatalf("expected nil error but got: %v", err)
+	}
+}
+
+func TestPool_ErrorWhileWaitingForSemaphore(t *testing.T) {
+	defer goleak.VerifyNoLeaks(t)
+
+	pool, fns := makePool(1)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+
+	go func() {
+		defer close(fns)
+
+		for i := 0; i < 2; i++ {
+			select {
+			case fns <- func(val int) func() Promise {
+				return func() Promise {
+					if val%2 == 0 {
+						return New(func(resolve ResolveFunc, reject RejectFunc) {
+							// sleep a little so we are sure the next item read
+							// from the channel is waiting for the semaphore
+							// when the context is cancelled due to the timeout.
+							time.Sleep(50 * time.Millisecond)
+							reject(errors.New("error in long running operation"))
+						})
+					}
+
+					return Resolve(nil)
+				}
+			}(i):
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	p := pool.Run(ctx)
+
+	_, err := awaitWithTimeout(t, p, 2*time.Second)
+	if err != context.DeadlineExceeded {
+		t.Fatalf("expected error %v got %v", context.DeadlineExceeded, err)
 	}
 }
